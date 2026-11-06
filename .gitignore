@@ -1,0 +1,103 @@
+# ---------------------------------------------------------------------------
+# PetCare .gitignore
+#
+# The intent: the code is shared, the products and anything machine-specific
+# are not.  Be generous here -- a repository that accumulates one PNG per test
+# per candidate over 30k targets stops being cloneable.
+# ---------------------------------------------------------------------------
+
+# --- python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+.python-version
+.tox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- editors and OS -------------------------------------------------------
+.DS_Store
+.ipynb_checkpoints/
+*.swp
+*~
+.idea/
+.vscode/
+
+# --- outputs: keep the code in git, not the products ----------------------
+out/
+out_*/
+outputs/
+results/
+run_*/
+*.log
+
+# per-candidate products, wherever they land
+petcare.json
+summary.csv
+report*.html
+**/report_c*.html
+**/dedup_annotated.csv
+**/known_annotated.csv
+
+# --- caches and downloads -------------------------------------------------
+# These belong outside any synced folder (see petcare/cache.py); ignored here
+# as well in case someone points $PETCARE_CACHE at the checkout.
+cache/
+.cache/
+mastDownload/
+tesscut/
+*.zip
+
+# --- data: never in git ---------------------------------------------------
+*.fits
+*.fits.gz
+*.fits.fz
+*.npz
+!examples/*/data/**/*.npz
+*.parquet
+*.pq
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.feather
+
+# figures: every test writes them, none of them belong here
+*.png
+*.pdf
+*.jpg
+*.jpeg
+*.svg
+!docs/*.svg
+
+# --- internal-only --------------------------------------------------------
+# Machine-specific driver scripts and anything with a hardcoded path.  The
+# local master driver lives outside this repository on purpose;
+# these patterns catch a stray copy.
+local/
+local_*.py
+*_local.py
+env.sh
+.env
+secrets*
+
+# calibration: the sample definitions are shared, the run products are not
+calibration/out/
+calibration/runs/
+calibration/*.csv
+!calibration/samples/*.csv
+
+# --- internal design notes ------------------------------------------------
+# DESIGN_NOTES.md is the working document for this project: hardcoded paths,
+# per-star validation numbers, failure post-mortems, and notes addressed to
+# the two people building it.  The shared documentation is README.md.
+DESIGN_NOTES.md
