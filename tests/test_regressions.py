@@ -70,3 +70,9 @@ def test_every_script_prints_help(name, capsys):
         mod.main(["--help"])
     assert exc.value.code == 0
     assert "usage" in capsys.readouterr().out
+
+
+def test_old_no_report_flag_is_still_accepted():
+    # reports are gone, but scripts written for older versions pass --no-report
+    args = pc_main.build_parser().parse_args(["--tic", "1", "--no-report"])
+    assert args.no_report is True

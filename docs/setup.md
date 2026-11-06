@@ -1,8 +1,8 @@
 # Setup
 
 ```bash
-git clone <repository URL>
-cd PetCare
+git clone https://github.com/awmann/PetCare_Public.git
+cd PetCare_Public
 pip install -e ".[all]"
 pc-doctor
 ```
@@ -136,6 +136,7 @@ upstream repository has no ephemeris scan and no ATLAS downloader.
 
 ```bash
 git clone https://github.com/awmann/DEATHSTAR.git
+git -C DEATHSTAR checkout petcare-2026-11      # the version this PetCare was tested with
 export PETCARE_DEATHSTAR=/path/to/DEATHSTAR
 export PETCARE_DEATHSTAR_PYTHON=/path/to/deathstar/env/bin/python
 ```

@@ -88,6 +88,8 @@ def build_parser():
 
     g = ap.add_argument_group("output")
     g.add_argument("--no-plot", action="store_true")
+    # reports are no longer written; accepted so older command lines still run
+    g.add_argument("--no-report", action="store_true", help=argparse.SUPPRESS)
     g.add_argument("--quiet", action="store_true")
     g.add_argument("--append-summary", action="store_true",
                    help="merge into an existing summary.csv instead of "

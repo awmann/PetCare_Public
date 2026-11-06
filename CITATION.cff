@@ -3,6 +3,7 @@ message: "If you use PetCare, please cite the paper below once it is available, 
 title: "PetCare: transit candidate vetting for young stars"
 type: software
 license: MIT
+repository-code: "https://github.com/awmann/PetCare_Public"
 authors:
   - family-names: Barber
     given-names: Madyson

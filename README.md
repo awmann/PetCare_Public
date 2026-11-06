@@ -36,8 +36,8 @@ the information, and a scalar hides it.
 ## Install
 
 ```bash
-git clone <repository URL>
-cd PetCare
+git clone https://github.com/awmann/PetCare_Public.git
+cd PetCare_Public
 pip install -e ".[all]"
 pc-doctor
 ```

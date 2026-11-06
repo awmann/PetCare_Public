@@ -18,11 +18,17 @@ dependencies = [
     "matplotlib>=3.7",
     "pandas>=2.0",
     "batman-package>=2.4",
+    # batman imports distutils, which Python 3.12 removed; setuptools provides it
+    "setuptools>=60; python_version >= '3.12'",
     "celerite2>=0.2",
     "astroquery>=0.4.6",
     "certifi",
     "requests",
 ]
+
+[project.urls]
+Homepage = "https://github.com/awmann/PetCare_Public"
+Issues = "https://github.com/awmann/PetCare_Public/issues"
 
 [project.optional-dependencies]
 # Needed by pc_crossmatch (MAST light-curve products) and nothing else.
