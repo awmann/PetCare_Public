@@ -44,3 +44,7 @@ TOI 2076
 TOI 6109
 TOI 6448
 TOI 6715
+# TOI-1556.01 worked example: TFOPWG FP (NEB); the target and the eclipsing neighbour
+TIC 405794804
+TIC 405794805
+TOI 1556

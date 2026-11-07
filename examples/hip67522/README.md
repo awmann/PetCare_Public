@@ -21,8 +21,8 @@ the harmonic at 0.708 d, and taking the median across sectors stops it deciding 
 | | planet b | planet c |
 |---|---|---|
 | fit | PASS, 4655 ppm | PASS, 3228 ppm |
-| PASS / FLAG / INCONCLUSIVE / FAIL | 15 / 5 / 1 / 0 | 12 / 7 / 2 / 0 |
-| joint GP | PASS, 54 sigma | PASS, 18 sigma |
+| PASS / FLAG / INCONCLUSIVE / FAIL | 13 / 6 / 1 / 0 | 12 / 6 / 2 / 0 |
+| joint GP, above the null phases | FLAG, 40 sigma | PASS, 8.9 sigma |
 | `interp` | PASS | FLAG |
 | `uniqueness` | PASS | FLAG |
 
@@ -43,6 +43,11 @@ other phases and asks how often those pass. For c, 33% and 25% do: on this star 
 would also object to a real transit this deep, so they cannot refute it, and the result is
 a FLAG that records the power. A deeper transit, or one the tests could have seen and did
 not, still fails.
+
+b's `jointgp` FLAG is not about significance: b stands 40 sigma above the same fit at 16
+phases with no transit, but its 18 per-transit depths scatter more than their errors
+allow (chi2 169 for 17 dof). Spots crossed by the planet, or unocculted spots changing
+between transits, do that to a real planet, so depth consistency only ever flags.
 
 Read a FLAG as "look at this, for this reason". c's other flags are worth reading too:
 `flares` finds the transit 48% deeper with flares masked, and `secondary` a 4.6 sigma bump

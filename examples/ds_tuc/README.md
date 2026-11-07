@@ -34,7 +34,7 @@ Neither planet is refuted by any test.
 | | planet c | planet b |
 |---|---|---|
 | fit | PASS, 812 ppm, local baseline | PASS, 3984 ppm, GP |
-| PASS / FLAG / INCONCLUSIVE / FAIL | 14 / 5 / 2 / 0 | 16 / 5 / 0 / 0 |
+| PASS / FLAG / INCONCLUSIVE / FAIL | 14 / 4 / 2 / 0 | 15 / 5 / 0 / 0 |
 
 Each planet's row in `candidates.csv` masks the other, because the table lists both.
 
@@ -61,11 +61,11 @@ There is deliberately no overall score. Which test objected, and why, is the inf
 Planet c shows what the input costs. These are the same candidate and ephemeris, on the
 same TESS sectors:
 
-| input | epochs | fit depth | joint GP significance | result |
+| input | epochs | fit depth | joint GP, above the null phases | result |
 |---|---:|---:|---:|---|
-| tessquicklook, via `pc-extract` | 12 | 812 ppm | 12.3 sigma | no FAIL |
-| tessquicklook CSV (no quality mask) | 12 | 768 ppm | 4.8 sigma | `jointgp` FAIL |
-| SPOC 120 s PDCSAP | 10 | 860 ppm | 1.4 sigma | `jointgp` FAIL |
+| tessquicklook, via `pc-extract` | 12 | 812 ppm | 8.2 sigma | no FAIL |
+| tessquicklook CSV (no quality mask) | 12 | 768 ppm | 2.2 sigma | `jointgp` FAIL |
+| SPOC 120 s PDCSAP | 10 | 860 ppm | 2.2 sigma | `jointgp` FAIL |
 
 The public SPOC light curve is too noisy to recover this planet with confidence. A
 local-baseline fit still finds a dip of about the right depth, but it is not significant
@@ -75,7 +75,8 @@ rotators. Planet b, at five times the depth, is recovered from SPOC too.
 
 The SPOC result isn't always stable either. On that light curve, tiny changes in the
 assumed rotation period can send the ephemeris refinement off the transit, so if you
-see a depth near zero there, check the fitted `t0` against your input.
+see a depth near zero there, check the fitted `t0` against your input. The SPOC row above was run with `--prot 2.85`;
+without it the fit lands 9 hours off the transit.
 
 ## Your own targets
 

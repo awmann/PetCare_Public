@@ -395,27 +395,6 @@ def toi_table(max_age_days: float = 7.0):
                              what="ExoFOP TOI table"))
 
 
-def toi_rows(tic: int, max_age_days: float = 7.0) -> list:
-    """Every TOI row for one TIC, as plain dicts (possibly empty)."""
-    import pandas as pd
-    df = toi_table(max_age_days=max_age_days)
-    if df is None or "TIC ID" not in df.columns:
-        return []
-    sub = df[df["TIC ID"].astype("Int64") == int(tic)]
-    out = []
-    for _, row in sub.iterrows():
-        d = {}
-        for k, v in row.to_dict().items():
-            if isinstance(v, float) and not np.isfinite(v):
-                d[k] = None
-            elif pd.isna(v) if not isinstance(v, (list, tuple, np.ndarray)) else False:
-                d[k] = None
-            else:
-                d[k] = v.item() if isinstance(v, np.generic) else v
-        out.append(d)
-    return out
-
-
 # --------------------------------------------------------------------------
 # Gaia variability
 

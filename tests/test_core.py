@@ -612,3 +612,22 @@ def test_vetting_metrics_from_an_empty_record():
     out = metrics.collect({"tests": {}})
     assert out["version"] == metrics.VERSION
     assert out["metrics"]["depth_ppm"] is None and out["metrics"]["MS4"] is None
+
+
+def test_jointgp_restrained_fit_recovers_a_transit_on_a_quiet_star():
+    from petcare.fitting import GPSpec
+    from petcare.scripts import pc_jointgp as jg
+    rng = np.random.default_rng(3)
+    t14 = 0.12
+    tw = np.arange(-0.48, 0.48, 0.004)
+    sw = np.clip((0.5 * t14 - np.abs(tw)) / (0.2 * t14), 0, 1)
+    ew = np.full(tw.size, 5e-4)
+    # a weak, slow Matern: the restrained fit should return the injected depth
+    spec = GPSpec(kind="matern", names=("log_sigma", "log_rho"),
+                  values=np.log([2e-4, 2.0]), success=True)
+    yw = -2e-3 * sw + rng.normal(0, 5e-4, tw.size)
+    d, sd, _ = jg._restrained(spec, tw, yw, ew, sw, tw, t14)
+    assert abs(d - 2e-3) < 3 * sd and d / sd > 10
+    # and no dip gives a depth consistent with zero
+    d0, sd0, _ = jg._restrained(spec, tw, yw + 2e-3 * sw, ew, sw, tw, t14)
+    assert abs(d0) < 3 * sd0

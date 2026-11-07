@@ -283,8 +283,7 @@ def _verdict(r, ctx, imaging, spect, ts_rows, companions, viable,
                       f"account for, not a new doubt")
     elif [d for d in (dispositions or ()) if d in REFUTED]:
         inventory += (". TFOPWG has already dispositioned this star "
-                      f"{'/'.join(d for d in dispositions if d in REFUTED)} -- "
-                      "see pc_exofop")
+                      f"{'/'.join(d for d in dispositions if d in REFUTED)}")
 
     if adverse:
         first = adverse[0]

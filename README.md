@@ -47,6 +47,24 @@ Python 3.10+. [`docs/setup.md`](docs/setup.md) covers getting light curves
 periods, environment variables and credentials. **PetCare assumes your light
 curve is already corrected for dilution.**
 
+### Accounts and credentials
+
+Tiers 0–2 need no accounts: MAST, TESScut, Gaia, the TIC, ExoFOP and the LCO
+archive are all queried anonymously. Only `pc-archival` (tier 3) logs in to
+anything, and it reads everything from the environment:
+
+| for | PetCare looks for | how to set it up |
+|---|---|---|
+| DEATHSTAR (all of `pc-archival`) | `$PETCARE_DEATHSTAR` (the checkout) and `$PETCARE_DEATHSTAR_PYTHON` (its interpreter), or `--deathstar` / `--deathstar-python` | [setup.md § Ground-based archives](docs/setup.md#ground-based-archives) |
+| ATLAS forced photometry | `$ATLAS_API_TOKEN` (or `$ATLAS_TOKEN`), else `$ATLAS_USERNAME` + `$ATLAS_PASSWORD` | register at <https://fallingstar-data.com/forcedphot/>, a separate account from any other ATLAS login |
+| ZTF | the IRSA login `ztfquery` stores in `~/.ztfquery` | run `ztfquery.io.set_account('irsa')` once, in DEATHSTAR's environment |
+
+Without them `pc-archival` returns INCONCLUSIVE and says which one is missing;
+nothing else is affected. Export them in `~/.zshenv` (or source a file in your
+job), not `~/.zshrc`, which batch jobs don't read. `pc-doctor --check-credentials`
+tries each login without printing it. Details in
+[`docs/setup.md`](docs/setup.md#credentials).
+
 ---
 
 ## Quick start
@@ -77,11 +95,17 @@ petcare --tic 410214986 --period 8.138268 --t0 1332.30991 --duration 3.4 \
 petcare --candidates candidates.csv --tiers 0 1 2 --out out/
 ```
 
-which writes `out/<target>/petcare.json`, a one-row-per-candidate
-`summary.csv`, and a self-contained HTML report per candidate with every
-figure inline.
+which writes a plot and a JSON per test under `out/<target>/`, a merged
+`petcare.json` per candidate with its vetting metrics, and a one-row-per-candidate
+`summary.csv` with every status, reason and metric (`m_*` columns). The plots are
+what to read; the metrics are for sorting and cutting.
 
-See [`Notebooks/`](Notebooks/) for worked examples with plots.
+See [`Notebooks/`](Notebooks/) for worked examples with plots, and
+[`examples/`](examples/) for three complete runs with their data: DS Tuc A
+([`ds_tuc`](examples/ds_tuc/README.md), a shallow planet on an active star),
+HIP 67522 ([`hip67522`](examples/hip67522/README.md), what a test does when it cannot
+see a planet), and TOI-1556.01 ([`toi1556`](examples/toi1556/README.md), a nearby
+eclipsing binary caught in the TESS pixels and resolved in ZTF).
 
 ---
 
@@ -96,7 +120,6 @@ Tiered by cost. Tiers 0 and 1 are cheap enough to run on everything.
 | `pc-stellar` | what are this star's parameters, and how well known are they? |
 | `pc-neighbours` | which nearby star could reproduce this depth if it were eclipsing? |
 | `pc-astrometry` | does Gaia astrometry indicate an unresolved companion? |
-| `pc-exofop` | does high-resolution imaging or spectroscopy already exist? |
 
 ### Tier 1 — light curve only
 
@@ -112,6 +135,9 @@ Tiered by cost. Tiers 0 and 1 are cheap enough to run on everything.
 | `pc-rotation` | is the period a harmonic of the rotation period? |
 | `pc-phasecurve` | is the dip a sharp transit, or the star's own modulation at that period — does it repeat where the star repeats? |
 | `pc-shapetime` | does the transit keep its duration and depth over the years, as a planet's does? |
+| `pc-interp` | is the dip larger than what the GP interpolation across the mask invents at random times on this star? |
+| `pc-jointgp` | is each transit significant when fitted jointly with the variability, nothing masked? |
+| `pc-uniqueness` | is the dip unique in the fold, and a dip (ModShift, SHP)? |
 | `pc-flares` | is the fold carried by flare-adjacent cadences? |
 | `pc-instrument` | does the signal track the spacecraft rather than the star? |
 
@@ -120,6 +146,7 @@ Tiered by cost. Tiers 0 and 1 are cheap enough to run on everything.
 | tool | question |
 |---|---|
 | `pc-centroid` | does the flux deficit come from the target's pixels? |
+| `pc-pixels` | what does each pixel's folded light curve look like (in the style of LATTE)? |
 
 ### Tier 3 — external archives
 

@@ -259,7 +259,9 @@ def run(ctx: cli.Context) -> Result:
             getattr(a, "atlas_years", ATLAS_DEFAULT_YEARS))
     r.metrics["atlas_window_mjd"] = [mjd_min, mjd_max]
 
-    outdir = ctx.out / ctx.target.slug / "deathstar"
+    # absolute: DEATHSTAR runs from its own checkout, so a relative --out
+    # would point it at a spec file that does not exist
+    outdir = (ctx.out / ctx.target.slug / "deathstar").resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     spec_path = outdir / "spec.json"
     result_path = outdir / "deathstar_result.json"

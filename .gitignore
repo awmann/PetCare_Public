@@ -78,6 +78,7 @@ tesscut/
 *.jpeg
 *.svg
 !docs/*.svg
+!examples/*/figures/*.png
 
 # --- internal-only --------------------------------------------------------
 # Machine-specific driver scripts and anything with a hardcoded path.  The

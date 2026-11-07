@@ -36,7 +36,6 @@ from .result import Status, utc_now
 TESTS = [
     # (name, module, tier, uses_fit)
     ("stellar",    "pc_stellar",    0, False),
-    ("exofop",     "pc_exofop",     0, False),
     ("followup",   "pc_followup",   3, True),
     ("astrometry", "pc_astrometry", 0, False),
     ("neighbours", "pc_neighbours", 0, True),
