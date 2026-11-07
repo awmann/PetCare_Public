@@ -631,3 +631,16 @@ def test_jointgp_restrained_fit_recovers_a_transit_on_a_quiet_star():
     # and no dip gives a depth consistent with zero
     d0, sd0, _ = jg._restrained(spec, tw, yw + 2e-3 * sw, ew, sw, tw, t14)
     assert abs(d0) < 3 * sd0
+
+
+def test_crossmatch_per_transit_depth_ignores_rotation():
+    from petcare.scripts import pc_crossmatch as xm
+    rng = np.random.default_rng(5)
+    P, t0, dur = 7.3, 1000.2, 0.15
+    t = np.arange(1000.0, 1060.0, 0.01)
+    # 2% rotation at 2.9 d dwarfs a 1000 ppm transit; a pooled fold would not survive it
+    f = 1 + 0.02 * np.sin(2 * np.pi * t / 2.9) + rng.normal(0, 3e-4, t.size)
+    x = ((t - t0 + 0.5 * P) % P) - 0.5 * P
+    f[np.abs(x) < dur / 2] -= 1e-3
+    m = xm._measure(t, f, P, t0, dur)
+    assert abs(m["depth_ppm"] - 1000) < 3 * m["depth_err_ppm"] and m["depth_err_ppm"] < 300

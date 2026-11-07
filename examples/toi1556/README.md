@@ -31,8 +31,8 @@ tests that catch it are the ones that look at *where* the light comes from.
 ranges from 146 to 1658 ppm (chi2 = 344 for 11 dof). A planet's depth does not care which
 detector recorded it. A neighbour's contribution does, because how much of it falls in
 the aperture changes with the pointing. `crossmatch` sees the same thing between
-pipelines: 2390 ppm in tessquicklook, 2230 in QLP and 1015 in TESS-SPOC, which each use
-a different aperture. It is also why the fit's pooled depth (781 ppm) is lower than the
+pipelines: 749 ppm in tessquicklook, 1038 in TESS-SPOC and 2672 in QLP, each with its own
+aperture, against errors of 20-30 ppm. It is also why the fit's pooled depth (781 ppm) is lower than the
 TOI catalogue's: there is no single depth to measure.
 
 **2. The pixels point at a neighbour** (`centroid` FAIL).

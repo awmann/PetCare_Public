@@ -44,7 +44,7 @@ from ..prep import chi2_pvalue, weighted_mean
 from ..result import Result
 
 TEST = "crossmatch"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 #: Phase offsets used for the null (uncertainty) measurements.
 NULL_OFFSETS = (-0.35, -0.25, -0.15, 0.15, 0.25, 0.35)
@@ -58,6 +58,18 @@ DISAGREE_FRACTION = 0.3
 
 #: Minimum independent extractions for the comparison to mean anything.
 MIN_PIPELINES = 2
+
+#: Per-transit local baseline (0.1.1).  0.1.0 folded every transit together
+#: against one out-of-transit median, so on an active star each pipeline's depth
+#: was whatever rotation phase its transits sampled: DS Tuc A c (812 ppm) came out
+#: 229-5325 ppm across four pipelines and FLAGged; with a quadratic per transit
+#: they agree at 631-1165 ppm (chi2 1.6 for 3 dof).  The window is +/- WINDOW_T14
+#: durations -- small against Prot, or the baseline eats the transit.
+WINDOW_T14 = 2.0
+IN_T14 = 0.35
+OOT_T14 = 0.6
+MIN_IN = 3
+MIN_OOT_SIDE = 4
 
 
 def add_arguments(ap):
@@ -101,7 +113,7 @@ def run(ctx: cli.Context) -> Result:
         try:
             lc = ctx.lc
             dil, dil_src = lc.dilution()
-            m = _measure(lc.t, lc.f, period, t0, dur)
+            m = _measure(lc.t, lc.f, period, t0, dur, ctx.known)
             if m:
                 m.update({"pipeline": "local (tessquicklook)",
                           "mission": "TESS", "n_sectors": lc.n_sectors,
@@ -134,7 +146,7 @@ def run(ctx: cli.Context) -> Result:
         except Exception as exc:  # noqa: BLE001
             notes.append(f"{author}: could not read products: {exc}")
             continue
-        m = _measure(lc.t, lc.f, period, t0, dur)
+        m = _measure(lc.t, lc.f, period, t0, dur, ctx.known)
         if not m:
             notes.append(f"{author}: no usable transit coverage")
             continue
@@ -296,42 +308,59 @@ def _download(rows, max_products, no_download):
     return paths
 
 
-def _measure(t, f, period, t0, dur) -> dict | None:
+def _measure(t, f, period, t0, dur, known=()) -> dict | None:
     """Depth and its null-measured uncertainty, identically for every input."""
     t = np.asarray(t, float)
     f = np.asarray(f, float)
     good = np.isfinite(t) & np.isfinite(f)
+    # the other known signals are masked, matched by overlap as in prep
+    others = [k for k in (known or []) if good.any() and not ephem.match_known(
+        period, t0, dur * 24, [k], float(t[good].min()), float(t[good].max()))]
+    if others:
+        good &= ~ephem.mask_known_transits(t, others, width=2.0)
     t, f = t[good], f[good]
     if t.size < 200:
         return None
 
-    depth = _fold_depth(t, f, period, t0, dur)
-    if depth is None:
+    real = _epoch_depths(t, f, period, t0, dur)
+    if real.size == 0:
         return None
-    nulls = [_fold_depth(t, f, period, t0 + off * period, dur)
-             for off in NULL_OFFSETS]
-    nulls = [x for x in nulls if x is not None and np.isfinite(x)]
-    if len(nulls) < 3:
+    # the null error is the scatter of single-transit depths at phases with no
+    # transit, divided by sqrt(N transits): what this estimator does here by chance
+    nulls = np.concatenate([_epoch_depths(t, f, period, t0 + off * period, dur)
+                            for off in NULL_OFFSETS])
+    if nulls.size < 3:
         return None
-    err = float(1.4826 * np.median(np.abs(np.array(nulls) - np.median(nulls))))
+    sd = float(1.4826 * np.median(np.abs(nulls - np.median(nulls))))
+    err = sd / np.sqrt(real.size)
 
     ph = ephem.phase(t, period, t0)
-    return {"depth_ppm": float(depth), "depth_err_ppm": max(err, 1.0),
+    return {"depth_ppm": float(np.mean(real)), "depth_err_ppm": max(err, 1.0),
             "n_points": int(t.size),
             "n_in": int((np.abs(ph) < 0.5 * dur).sum()),
-            "n_transits": int(len(np.unique(
-                ephem.epoch_number(t[np.abs(ph) < 0.5 * dur], period, t0)))),
+            "n_transits": int(real.size),
+            "epoch_depth_ppm": [float(x) for x in real],
+            "null_epoch_sd_ppm": sd,
             "baseline_days": float(np.ptp(t)),
-            "n_nulls": len(nulls)}
+            "n_nulls": int(nulls.size)}
 
 
-def _fold_depth(t, f, period, t0, dur):
-    ph = ephem.phase(t, period, t0)
-    in_m = np.abs(ph) < 0.4 * dur
-    oot_m = (np.abs(ph) >= 0.75 * dur) & (np.abs(ph) < 3.0 * dur)
-    if in_m.sum() < 5 or oot_m.sum() < 20:
-        return None
-    return float((np.median(f[oot_m]) - np.mean(f[in_m])) * 1e6)
+def _epoch_depths(t, f, period, t0, dur):
+    """Per-transit depth [ppm] against a quadratic through that transit's own
+    shoulders; transits without enough data on both sides are skipped."""
+    out = []
+    for e in np.unique(ephem.epoch_number(t, period, t0)):
+        x = t - float(ephem.transit_time(e, period, t0))
+        w = np.abs(x) < WINDOW_T14 * dur
+        oot = w & (np.abs(x) > OOT_T14 * dur)
+        inn = w & (np.abs(x) < IN_T14 * dur)
+        if inn.sum() < MIN_IN or (oot & (x < 0)).sum() < MIN_OOT_SIDE \
+                or (oot & (x > 0)).sum() < MIN_OOT_SIDE:
+            continue
+        c = np.polyfit(x[oot], f[oot], 2)
+        base = np.polyval(c, x[inn])
+        out.append(float(-np.mean(f[inn] / base - 1.0) * 1e6))
+    return np.array(out)
 
 
 def _plot(ctx, r, measurements, period, t0, dur):

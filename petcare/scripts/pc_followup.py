@@ -39,7 +39,7 @@ from ..plotting import C_ALT, C_BAD, C_OK, annotate_status, figure, save
 from ..result import Result
 
 TEST = "followup"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 #: A companion needing more than this fraction eclipsed is impossible.
 IMPOSSIBLE_DEPTH = 1.0
@@ -244,9 +244,8 @@ def run(ctx: cli.Context) -> Result:
         "depth_ppm": depth,
     })
 
-    plot = _plot(ctx, r, companions, lco)
-    if plot:
-        r.add_plot(plot)
+    # No plot since 0.1.2 (vetters never used it); everything it
+    # showed, the LCO frames in transit above all, is in the metrics and the reason.
 
     have_anything = bool(imaging or spect or tseries or comps
                          or lco.get("n_frames"))
