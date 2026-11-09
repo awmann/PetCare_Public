@@ -230,7 +230,8 @@ def annotate_status(fig, result) -> None:
     # of the figure, which is how several plots shipped with their verdict
     # unreadable.
     import textwrap
-    width = max(int(fig.get_figwidth() * 16), 60)
+    # 9 pt text fits about 13 characters per inch; 16 still ran off both edges
+    width = max(int(fig.get_figwidth() * 12), 60)
     body = "\n".join(textwrap.wrap("   |   ".join(bits), width=width,
                                    max_lines=3, placeholder=" ..."))
     fig.suptitle(f"{result.target.name}  |  {result.test}\n{body}",

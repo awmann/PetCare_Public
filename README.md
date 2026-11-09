@@ -109,6 +109,44 @@ eclipsing binary caught in the TESS pixels and resolved in ZTF).
 
 ---
 
+## What it looks like
+
+Every test writes a figure with its verdict across the top. These are from the
+[DS Tuc A example](examples/ds_tuc/README.md), the outer planet (DS Tuc A c, a 21.6 d,
+~800 ppm transit on a star that varies by 6-9% every 2.9 days), and the
+[TOI-1556 example](examples/toi1556/README.md).
+
+**The light curve, by sector,** with the predicted transits shaded and PetCare's
+variability model in green (two of ten sectors shown). The transit is smaller than the
+line width; this is the regime PetCare is built for.
+
+![DS Tuc A c light curve by sector](docs/images/dstuc_c_lightcurve_sectors.png)
+
+**Each transit, before and after removing the variability** (`pc-phasecurve`; the four
+best-covered of thirteen shown).
+
+![DS Tuc A c individual transits](docs/images/dstuc_c_transits_individual.png)
+
+**Is the dip bigger than what the detrending invents?** (`pc-interp`) The same mask
+dropped at 399 random times on this star shows what interpolating the GP across a gap
+leaves behind on its own; the real epochs are compared with that.
+
+![DS Tuc A c interpolation test](docs/images/dstuc_c_interp.png)
+
+**Each transit fitted jointly with the variability, against the same fit where there is
+no transit** (`pc-jointgp`). The candidate (red line, right) stands 8.2σ above the
+null phases.
+
+![DS Tuc A c joint GP test](docs/images/dstuc_c_jointgp.png)
+
+**Which star is the signal on?** (`pc-centroid`, TOI-1556.01) The depth image (middle)
+peaks on a neighbour 37″ away (green ×), not the target (black +), in each sector shown.
+DEATHSTAR then finds that neighbour eclipsing in ZTF.
+
+![TOI-1556.01 difference imaging](examples/toi1556/figures/centroid.png)
+
+---
+
 ## The tests
 
 Tiered by cost. Tiers 0 and 1 are cheap enough to run on everything.
