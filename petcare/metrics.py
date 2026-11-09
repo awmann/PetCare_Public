@@ -18,7 +18,7 @@ import math
 
 import numpy as np
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 #: Free parameters of the transit model, for the BIC (t0, P, Rp/R*, a/R*, b).
 N_TRANSIT_PARAMS = 5
@@ -107,6 +107,101 @@ def flare_proximity(rec, epochs: list, t14_days: float | None) -> dict:
     return {"nearest_flare_min_t14": float(dist.min()), "nearest_flare_median_t14": float(np.median(dist)),
             "frac_transits_flare_within_1t14": float(np.mean(dist < 1.0)),
             "flare_list_truncated": bool(_m(rec, "flares", "flare_intervals_truncated"))}
+
+
+#: An epoch counts as clean with at least this much of the transit covered and
+#: no more than this fraction of its in-transit cadences inside a flare.
+CLEAN_COVERAGE = 0.8
+CLEAN_MAX_FLARE_FRAC = 0.2
+
+
+def vetter_epoch_metrics(rec: dict, depth: float | None) -> dict:
+    """Per-transit checks aimed at the commonest reasons we reject candidates by eye.
+
+    "Flat lines", "a few bad transits carry it", "gaps/edges", "flares",
+    "inconsistent between sectors", "rotation-synced".  Per-epoch depths come
+    from pc_jointgp (the GP-restrained ones) where it ran, else pc_depths;
+    gap/edge/coverage flags from pc_depths; the flare fraction per epoch from
+    pc_flares.  On a small sample of our eye-vetted candidates ``vote_frac`` and
+    ``flat_frac`` separated planet-like from rejected slightly better than any
+    existing metric.  They are reported for training a vetter later, not cut on.
+    """
+    flags = {e.get("epoch"): e for e in (_m(rec, "depths", "epochs") or [])}
+    jg = _m(rec, "jointgp") or {}
+    if jg.get("epochs"):
+        ep = list(jg["epochs"])
+        d = np.array([_f(x) for x in jg.get("epoch_depth_ppm") or []], dtype=float)
+        s = np.array([_f(x) for x in jg.get("epoch_err_ppm") or []], dtype=float)
+        if not (len(ep) == d.size == s.size):
+            return {}
+        source = "jointgp"
+    else:
+        ep = list(flags)
+        d = np.array([_f(flags[e].get("depth_ppm")) for e in ep], dtype=float)
+        s = np.array([_f(flags[e].get("depth_err_ppm")) for e in ep], dtype=float)
+        source = "depths"
+    ok = np.isfinite(d) & np.isfinite(s) & (s > 0)
+    ep, d, s = [e for e, o in zip(ep, ok) if o], d[ok], s[ok]
+    n = int(d.size)
+    if n == 0:
+        return {}
+    w = 1.0 / s ** 2
+    D = _f(depth)
+    if D is None or D <= 0:
+        D = float(np.sum(d * w) / np.sum(w))
+    if D <= 0:
+        return {"source": source, "n": n}
+
+    pff = _m(rec, "flares", "per_epoch_flare_fraction") or {}
+    fl = np.array([_f(pff.get(str(e))) or 0.0 for e in ep])
+    f = [flags.get(e) or {} for e in ep]
+    clean = np.array([(_f(x.get("coverage")) if x.get("coverage") is not None else 1.0) >= CLEAN_COVERAGE
+                      and x.get("ingress_covered", True) and x.get("egress_covered", True)
+                      and not x.get("in_gap") and not x.get("near_sector_edge") for x in f], dtype=bool)
+    clean &= fl < CLEAN_MAX_FLARE_FRAC
+
+    def z(mask):
+        return float(np.sum(d[mask] * w[mask]) / np.sqrt(np.sum(w[mask]))) if mask.any() else 0.0
+
+    z_all = z(np.ones(n, bool))
+    # each epoch's vote: log-likelihood of "a transit at the fitted depth" over "flat"
+    vote = (d ** 2 - (d - D) ** 2) / (2 * s ** 2)
+    # "flat line": well under the fitted depth, and significantly so
+    flat = (d < D / 3) & ((D - d) / s > 2)
+    pos = np.clip(d * D * w, 0, None)       # each epoch's share of the matched-filter statistic
+    top = np.sort(pos)[::-1]
+    tot = float(pos.sum())
+    out = {
+        "source": source, "n": n, "n_clean": int(clean.sum()), "clean_frac": float(clean.mean()),
+        "z_all": z_all, "z_clean": z(clean),
+        "z_clean_over_all": z(clean) / z_all if z_all > 0 else None,
+        "vote_frac": float(np.mean(vote > 0)),
+        "vote_frac_clean": float(np.mean(vote[clean] > 0)) if clean.any() else None,
+        "flat_frac": float(np.mean(flat)),
+        "flat_frac_clean": float(np.mean(flat[clean])) if clean.any() else None,
+        "top1_share": float(top[0] / tot) if tot > 0 else None,
+        "top2_share": float(top[:2].sum() / tot) if tot > 0 else None,
+        "loo_min_over_all": (min(z(np.arange(n) != i) for i in range(n)) / z_all
+                             if z_all > 0 and n > 1 else None),
+        "flare_signal_share": float(pos[fl >= CLEAN_MAX_FLARE_FRAC].sum() / tot) if tot > 0 else None,
+        "edge_signal_share": float(pos[~clean].sum() / tot) if tot > 0 else None,
+        "chi2_red_about_fit": float(np.sum((d - D) ** 2 * w) / max(n - 1, 1)),
+    }
+    ps = _m(rec, "depths", "per_sector") or {}
+    sd = np.array([_f(v.get("depth_ppm")) for v in ps.values()], dtype=float)
+    se = np.array([_f(v.get("err_ppm")) for v in ps.values()], dtype=float)
+    g = np.isfinite(sd) & np.isfinite(se) & (se > 0)
+    sd, se = sd[g], se[g]
+    if sd.size >= 2:
+        mu, _ = _weighted(sd, se)
+        out["sector_chi2_red"] = float(np.sum(((sd - mu) / se) ** 2) / (sd.size - 1))
+        out["sector_min_over_max"] = float(max(sd.min(), 0.0) / sd.max()) if sd.max() > 0 else None
+    # do the transits land at one rotation phase? 1 = always the same phase
+    prot = _f(_m(rec, "rotation", "prot_days"))
+    tc = np.array([_f(x.get("t_center")) for x in f if _f(x.get("t_center")) is not None], dtype=float)
+    if prot and prot > 0 and tc.size >= 2:
+        out["rot_phase_coherence"] = float(np.abs(np.mean(np.exp(2j * np.pi * tc / prot))))
+    return out
 
 
 def collect(rec: dict) -> dict:
@@ -207,5 +302,6 @@ def collect(rec: dict) -> dict:
     }
     m.update({f"epochs_{k}": v for k, v in epoch_metrics(epochs).items()})
     m.update(flare_proximity(rec, epochs, t14_h / 24 if t14_h else None))
+    m.update({f"ve_{k}": v for k, v in vetter_epoch_metrics(rec, depth).items()})
     m["statuses"] = {t: r.get("status") for t, r in tests.items()}
     return {"version": VERSION, "metrics": m}

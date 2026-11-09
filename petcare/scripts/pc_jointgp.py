@@ -39,6 +39,10 @@ and 5 of 49 known planets instead of 6, while rejecting more of the candidates
 we had already rejected by eye.
 
 Where too few null phases can be fitted, the 0.1.x fit and grading are used.
+0.2.1 restores 0.1.2's sensitivity limit on the calibrated
+path: a calibrated FAIL that 0.1.2 would have left INCONCLUSIVE stays INCONCLUSIVE
+with metrics.sensitivity_limited, so these marginal survivors can be tracked and
+the rule turned off later.
 Real planets on spotted stars do vary in depth, so depth consistency only flags.
 
     python -m petcare.scripts.pc_jointgp --tic 410214986 --period 8.1383 \\
@@ -59,7 +63,7 @@ from ..plotting import C_BAD, C_BINNED, C_MODEL, annotate_status, figure, save
 from ..result import Result, Status
 
 TEST = "jointgp"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 #: Half-width of each transit's window, in T14, with a floor in days, so the GP
 #: sees enough out-of-transit flux on both sides to pin itself down.
@@ -93,8 +97,8 @@ FAIL_SIGMA = 5.0
 #: A FAIL means the dip is not there, which needs a fit able to see it.
 #: Below FAIL_SIGMA it is reported, not refuted, when all three hold: the
 #: search depth would itself be under FAIL_SIGMA at this error, the measured depth agrees
-#: with the search depth, and there is still this much evidence for a dip.  0.1.x only:
-#: the null calibration already measures what this fit can see on this star.
+#: with the search depth, and there is still this much evidence for a dip.  0.2.1 applies
+#: it again to calibrated FAILs, on the unrestrained fit.
 LIMITED_DEPTH_GAP_SIGMA = 2.0
 LIMITED_MIN_Z = 3.0
 #: Per-epoch errors this many times the white-noise error mean the GP is competing with the
@@ -226,6 +230,22 @@ def _epochs(t, f, err, shape, spec, period, t0, t14, method, exclude=None):
                      "white_err": float(np.sqrt(1.0 / np.sum(sw ** 2 / ew ** 2))),
                      "_t": tw - c, "_y": resid, "_s": sw})
     return rows, n_failed
+
+
+def _limited(ctx, rows):
+    """0.1.2's sensitivity limit on these rows: (search depth ppm, its sigma at this
+    error) when the fit is under FAIL_SIGMA but cannot rule out the search depth."""
+    if len(rows) < 2:
+        return None
+    mean, sig, _, _ = _combine(rows)
+    z = mean / sig
+    search_depth = getattr(ctx, "input_depth_ppm", None) or ctx.candidate.depth_ppm
+    if (search_depth and search_depth > 0 and sig > 0
+            and search_depth / (sig * 1e6) < FAIL_SIGMA
+            and (search_depth - mean * 1e6) / (sig * 1e6) < LIMITED_DEPTH_GAP_SIGMA
+            and LIMITED_MIN_Z <= z < FAIL_SIGMA):
+        return float(search_depth), float(search_depth / (sig * 1e6))
+    return None
 
 
 def _combine(rows):
@@ -360,7 +380,15 @@ def run(ctx: cli.Context) -> Result:
                        f"cannot be checked for repetition, so this is reported, "
                        f"not judged. {desc}")
     elif calibrated:
-        if z_cal < CAL_FAIL_SIGMA:
+        lim = _limited(ctx, full_rows)
+        if z_cal < CAL_FAIL_SIGMA and lim:
+            # Keep 0.1.2's rule, judged on the unrestrained fit as it was,
+            # so nothing 0.1.2 left unjudged is refuted now.  Tracked: these are marginal.
+            r.metrics["sensitivity_limited"] = True
+            r.inconclusive(f"the joint fit cannot settle this at the depth the search found: "
+                           f"{lim[0]:.0f} ppm would only be {lim[1]:.1f} sigma in the "
+                           f"unrestrained fit, and the measured depth agrees with it. {desc}")
+        elif z_cal < CAL_FAIL_SIGMA:
             r.fail(f"fitted jointly with the variability, the transit is no stronger than "
                    f"what the same fit finds at random phases on this star. {desc}")
         elif z_cal < CAL_PASS_SIGMA:
@@ -373,17 +401,12 @@ def run(ctx: cli.Context) -> Result:
         else:
             r.passed(f"the transit holds up fitted jointly with the variability. {desc}")
     else:
-        search_depth = getattr(ctx, "input_depth_ppm", None) or ctx.candidate.depth_ppm
-        limited = bool(search_depth and search_depth > 0 and sig > 0
-                       and search_depth / (sig * 1e6) < FAIL_SIGMA
-                       and (search_depth - mean * 1e6) / (sig * 1e6) < LIMITED_DEPTH_GAP_SIGMA
-                       and z >= LIMITED_MIN_Z)
-        if z < FAIL_SIGMA and limited:
+        lim = _limited(ctx, use)
+        if lim:
             r.metrics["sensitivity_limited"] = True
             r.inconclusive(f"the joint fit cannot settle this at the depth the search found: "
-                           f"{search_depth:.0f} ppm would only be "
-                           f"{search_depth / (sig * 1e6):.1f} sigma at this error, and the "
-                           f"measured depth agrees with it. {desc}")
+                           f"{lim[0]:.0f} ppm would only be {lim[1]:.1f} sigma at this error, "
+                           f"and the measured depth agrees with it. {desc}")
         elif z < FAIL_SIGMA:
             why = ("the GP explains the dip about as well" if not np.isfinite(degeneracy)
                    or degeneracy >= GP_DEGENERATE else

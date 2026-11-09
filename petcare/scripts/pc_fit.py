@@ -42,7 +42,7 @@ from ..result import Result
 from ..stellar import duration_t14, reconcile_density, rho_circ
 
 TEST = "fit"
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 #: GP amplitude / transit depth thresholds.  On 71 known planets this ratio
 #: had a median of 2.6 where the GP+transit fit recovered the planet and 10.8
@@ -195,6 +195,7 @@ def run(ctx: cli.Context) -> Result:
     # shorter re-seed lowers the floor and frees the GP, and on the known
     # planets that turned one planet's 785 ppm fit into 6900 (literature 714).
     seed_dur = dur_days
+    first_pass = None
     for fit_pass in (1, 2):
         # -------------------------------------------------------------- GP prior
         # Hyperparameters first, on transit-masked data, so that the variability
@@ -261,68 +262,99 @@ def run(ctx: cli.Context) -> Result:
         # spot modulation and a 4000 ppm transit, a box search on the raw flux
         # finds the spots: the first version of this test moved HIP 67522 b's
         # period by 0.3% and came back with a third of its true depth.
-        refined = {"success": False, "reason": "refinement disabled"}
-        period, t0 = period0, t0_0
-        if gp_prior.success:
-            f_search = fb - gp_trend_masked(tb, fb, eb, in_any, gp_prior) + 1.0
-        else:
-            f_search = fb
-            ctx.notes.append("GP hyperparameter fit failed; "
-                             "the period search ran on undetrended flux")
-        if not getattr(a, "no_refine", False):
-            refined = refine_ephemeris(
-                tb, f_search, period0, t0_0, dur_days,
-                max_drift_durations=float(getattr(a, "refine_drift", 3.0)))
-            if refined.get("success"):
-                period, t0 = refined["period"], refined["t0_btjd"]
+        retry = False
+        while True:
+            refined = {"success": False, "reason": "refinement disabled"}
+            period, t0 = period0, t0_0
+            if gp_prior.success:
+                f_search = fb - gp_trend_masked(tb, fb, eb, in_any, gp_prior) + 1.0
+            else:
+                f_search = fb
+                ctx.notes.append("GP hyperparameter fit failed; "
+                                 "the period search ran on undetrended flux")
+            if retry:
+                refined, period, t0 = first_pass["refined"], first_pass["period"], first_pass["t0"]
+            elif not getattr(a, "no_refine", False):
+                refined = refine_ephemeris(
+                    tb, f_search, period0, t0_0, dur_days,
+                    max_drift_durations=float(getattr(a, "refine_drift", 3.0)))
+                if refined.get("success"):
+                    period, t0 = refined["period"], refined["t0_btjd"]
 
-        drift = ephem.ephemeris_drift(period0, t0_0, period, t0,
-                                      t_ref=float(tb.max()), duration_h=dur_days * 24)
+            drift = ephem.ephemeris_drift(period0, t0_0, period, t0,
+                                          t_ref=float(tb.max()), duration_h=dur_days * 24)
 
-        # ------------------------------------------------------------- the fit
-        u1, u2, ld_source = star.limb_darkening()
+            # ------------------------------------------------------------- the fit
+            u1, u2, ld_source = star.limb_darkening()
 
-        # Starting depth measured on the variability-removed series.  See the
-        # note in joint_fit: a depth seeded from raw flux on an active star is
-        # noise, and the optimiser never recovers from it.
-        depth_guess = None
-        if refined.get("success") or gp_prior.success:
-            ph_g = ephem.phase(tb, period, t0)
-            gi = np.abs(ph_g) < 0.4 * dur_days
-            go = (np.abs(ph_g) >= 0.75 * dur_days) & (np.abs(ph_g) < 3.0 * dur_days)
-            if gi.sum() >= 5 and go.sum() >= 20:
-                src = f_search if gp_prior.success else fb
-                depth_guess = float(np.median(src[go]) - np.median(src[gi]))
-                r.provenance["depth_guess_ppm"] = depth_guess * 1e6
+            # Starting depth measured on the variability-removed series.  See the
+            # note in joint_fit: a depth seeded from raw flux on an active star is
+            # noise, and the optimiser never recovers from it.
+            depth_guess = None
+            if retry:
+                depth_guess = first_pass["depth_guess"]
+            elif refined.get("success") or gp_prior.success:
+                ph_g = ephem.phase(tb, period, t0)
+                gi = np.abs(ph_g) < 0.4 * dur_days
+                go = (np.abs(ph_g) >= 0.75 * dur_days) & (np.abs(ph_g) < 3.0 * dur_days)
+                if gi.sum() >= 5 and go.sum() >= 20:
+                    src = f_search if gp_prior.success else fb
+                    depth_guess = float(np.median(src[go]) - np.median(src[gi]))
+                    r.provenance["depth_guess_ppm"] = depth_guess * 1e6
 
-        fit_kwargs = dict(
-            u=(u1, u2), exp_time_days=exp_days, rho_star=rho_star,
-            gp_prior=gp_fit_prior,
-            min_rho_durations=float(getattr(a, "min_rho_durations", 3.0)),
-            n_starts=int(getattr(a, "starts", 4)), depth_guess=depth_guess,
-            max_drift_durations=float(getattr(a, "refine_drift", 3.0)) / 3.0,
-            gp_free=bool(getattr(a, "free_gp", False)))
-        mode = getattr(a, "variability", "auto")
-        fit_gp = (joint_fit(tb, fb, eb, period, t0, dur_days, **fit_kwargs)
-                  if mode in ("auto", "gp") else None)
-        fit_local = None
-        if mode in ("auto", "local"):
-            fit_local = local_joint_fit(
-                tb, fb, eb, period, t0, dur_days, u=(u1, u2),
-                exp_time_days=exp_days, rho_star=rho_star,
-                prot=(rot.get("prot_days") if rot else None),
-                window_durations=float(getattr(a, "local_window", 3.0)),
-                poly_order=int(getattr(a, "local_order", 2)),
+            fit_kwargs = dict(
+                u=(u1, u2), exp_time_days=exp_days, rho_star=rho_star,
+                gp_prior=gp_fit_prior,
+                min_rho_durations=float(getattr(a, "min_rho_durations", 3.0)),
                 n_starts=int(getattr(a, "starts", 4)), depth_guess=depth_guess,
-                max_drift_durations=float(getattr(a, "refine_drift", 3.0)) / 3.0)
-            if fit_local is not None and fit_local.detail.get("window_note"):
-                ctx.notes.append(fit_local.detail["window_note"])
+                max_drift_durations=float(getattr(a, "refine_drift", 3.0)) / 3.0,
+                gp_free=bool(getattr(a, "free_gp", False)))
+            mode = getattr(a, "variability", "auto")
+            fit_gp = (joint_fit(tb, fb, eb, period, t0, dur_days, **fit_kwargs)
+                      if mode in ("auto", "gp") else None)
+            fit_local = None
+            if mode in ("auto", "local"):
+                fit_local = local_joint_fit(
+                    tb, fb, eb, period, t0, dur_days, u=(u1, u2),
+                    exp_time_days=exp_days, rho_star=rho_star,
+                    prot=(rot.get("prot_days") if rot else None),
+                    window_durations=float(getattr(a, "local_window", 3.0)),
+                    poly_order=int(getattr(a, "local_order", 2)),
+                    n_starts=int(getattr(a, "starts", 4)), depth_guess=depth_guess,
+                    max_drift_durations=float(getattr(a, "refine_drift", 3.0)) / 3.0)
+                if fit_local is not None and fit_local.detail.get("window_note"):
+                    ctx.notes.append(fit_local.detail["window_note"])
 
-        fit, variability_choice = _choose_fit(mode, fit_gp, fit_local, depth_guess)
+            fit, variability_choice = _choose_fit(mode, fit_gp, fit_local, depth_guess)
+            # Collapse guard: pass 2 re-runs the ephemeris
+            # search over a window set by the longer fitted duration, and on some stars
+            # the GP interpolated across the wider masks fakes a deep dip that moves the
+            # ephemeris and seeds a depth from which both arms collapse to ~ppm.  Only
+            # then, re-fit with pass 1's ephemeris and depth guess; keep that only if it
+            # does not collapse too, so a pass 2 that did not collapse is unchanged.
+            if fit_pass == 2 and not retry and _collapsed(fit, first_pass["fit"]):
+                kept = dict(refined=refined, period=period, t0=t0, drift=drift,
+                            depth_guess=depth_guess, fit_kwargs=fit_kwargs, fit_gp=fit_gp,
+                            fit_local=fit_local, fit=fit, variability_choice=variability_choice)
+                retry = True
+                continue
+            if retry and (_collapsed(fit, first_pass["fit"]) or fit.depth_ppm > RETRY_MAX_RATIO * first_pass["fit"].depth_ppm):
+                (refined, period, t0, drift, depth_guess, fit_kwargs, fit_gp, fit_local, fit,
+                 variability_choice) = (kept[k] for k in ("refined", "period", "t0", "drift",
+                                        "depth_guess", "fit_kwargs", "fit_gp", "fit_local",
+                                        "fit", "variability_choice"))
+                ctx.notes.append("second pass collapsed; re-fitting with the first pass's "
+                                 "ephemeris and depth guess collapsed too or ran away, so it was kept")
+            elif retry:
+                ctx.notes.append(f"second pass collapsed to {kept['fit'].depth_ppm if kept['fit'] is not None else float('nan'):.0f} ppm; "
+                                 f"re-fitted with the first pass's ephemeris and depth guess")
+                r.provenance["pass2_collapse_retry"] = True
+            break
         t14_fit = getattr(fit, "t14_h", None)
         if fit_pass == 2 or fit is None or not t14_fit or not np.isfinite(t14_fit) \
                 or (t14_fit / 24.0) / dur_days < REFIT_DURATION_RATIO:
             break
+        first_pass = dict(refined=refined, period=period, t0=t0, depth_guess=depth_guess, fit=fit)
         ctx.notes.append(f"fitted T14 {t14_fit:.2f} h against the {dur_days * 24:.2f} h "
                          f"seed ({dur_source}); re-ran the variability model and the "
                          f"fit seeded with the fitted duration")
@@ -539,6 +571,19 @@ def run(ctx: cli.Context) -> Result:
             r.provenance.setdefault("notes", []).append(f"plotting failed: {exc!r}")
     return r
 
+
+
+#: A second-pass fit is "collapsed" when its depth falls below this fraction of the first pass's.
+COLLAPSE_FRACTION = 0.1
+#: ...and the re-fit is kept only if its depth is within this factor above the first pass's.
+RETRY_MAX_RATIO = 5.0
+
+
+def _collapsed(fit, first) -> bool:
+    """True when the second pass lost a transit the first pass had."""
+    if first is None or not getattr(first, "success", False) or not (first.depth_ppm > 0):
+        return False
+    return fit is None or not fit.success or fit.depth_ppm < COLLAPSE_FRACTION * first.depth_ppm
 
 def _plot(ctx, r, lc, tb, fb, eb, fit: FitResult, exp_days, had_known_mask,
           local_window=3.0, local_order=2):

@@ -607,6 +607,29 @@ def test_epoch_metrics_single_event_and_kfold():
     assert metrics.epoch_metrics([]) == {"n_epochs": 0}
 
 
+def test_vetter_epoch_metrics_flat_lines_and_flares():
+    from petcare import metrics
+
+    def rec(depths, flare=None):
+        eps = [{"epoch": i, "depth_ppm": d, "depth_err_ppm": 100, "t_center": 1000.0 + 5 * i,
+                "coverage": 1.0} for i, d in enumerate(depths)]
+        return {"tests": {"depths": {"metrics": {"epochs": eps}},
+                          "flares": {"metrics": {"per_epoch_flare_fraction": flare or {}}},
+                          "rotation": {"metrics": {"prot_days": 5.0}}}}
+    # six real transits at the fitted depth: every epoch votes for it, none is flat
+    good = metrics.vetter_epoch_metrics(rec([1000] * 6), 1000)
+    assert good["vote_frac"] == 1.0 and good["flat_frac"] == 0.0
+    assert abs(good["top2_share"] - 2 / 6) < 1e-9
+    # two deep "transits" and four flat lines: the vetters' commonest reject
+    bad = metrics.vetter_epoch_metrics(rec([3000, 3000, 0, 0, 0, 0], {"0": 0.5}), 1000)
+    assert bad["flat_frac"] == 4 / 6 and bad["vote_frac"] == 2 / 6
+    assert bad["top2_share"] == 1.0 and bad["flare_signal_share"] == 0.5
+    assert bad["n_clean"] == 5
+    # transit times every 5 d on a 5 d rotator: always the same rotation phase
+    assert abs(good["rot_phase_coherence"] - 1.0) < 1e-9
+    assert metrics.vetter_epoch_metrics({"tests": {}}, 1000) == {}
+
+
 def test_vetting_metrics_from_an_empty_record():
     from petcare import metrics
     out = metrics.collect({"tests": {}})
