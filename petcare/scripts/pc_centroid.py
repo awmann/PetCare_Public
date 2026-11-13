@@ -52,7 +52,7 @@ from ..plotting import annotate_status, figure, save
 from ..result import Result
 
 TEST = "centroid"
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 
 #: Cutout size in pixels.
 DEFAULT_CUTOUT = 15
@@ -70,6 +70,15 @@ SYS_FLOOR_PIX = 0.03
 #: A sector contributes a position only if its depth image detects the
 #: signal this well on its own.
 SECTOR_SNR_MIN = 4.0
+#: When fewer than two sectors reach SECTOR_SNR_MIN, sectors down to this S/N
+#: may still place the source, if their positions agree (Birge ratio at most
+#: AGREE_MAX_BIRGE) and the combined image detects the signal (SNR_MIN).  Each
+#: one alone is weak, but independent sectors landing on the same spot are the
+#: agreement a FAIL asks for.  The motivating case (2026-11-09): six sectors
+#: at S/N 2-4 on a 1.4 d rotator all put the dip 43 arcsec off, on a T = 13.7
+#: star (chi2 4.0 on 10 dof); with only one sector counted it was INCONCLUSIVE.
+#: Over the 77k-candidate run this changed 22 verdicts to FAIL, none on a TOI.
+SECTOR_SNR_AGREE, AGREE_MAX_BIRGE = 2.0, 2.0
 #: Registration error, as a fraction of the shift the scene needed.
 REG_ERR_FRAC = 0.5
 
@@ -216,6 +225,21 @@ def run(ctx: cli.Context) -> Result:
     comb = diffimage.combine_sectors(good, sys_floor_px=SYS_FLOOR_PIX,
                                      pixel_arcsec=catalogs.TESS_PIXEL_ARCSEC,
                                      snr_min=SECTOR_SNR_MIN, reg_frac=REG_ERR_FRAC)
+    strict = (comb["n_sectors_positioned"] >= 2
+              or comb.get("max_transits_positioned", 0) >= MIN_TRANSITS_SINGLE_SECTOR)
+    agreed = False
+    if not strict and comb["depth_snr"] >= SNR_MIN:
+        weak = diffimage.combine_sectors(good, sys_floor_px=SYS_FLOOR_PIX,
+                                         pixel_arcsec=catalogs.TESS_PIXEL_ARCSEC,
+                                         snr_min=SECTOR_SNR_AGREE, reg_frac=REG_ERR_FRAC)
+        if (weak["n_sectors_positioned"] >= 2 and "offset_arcsec" in weak
+                and weak.get("birge", np.inf) <= AGREE_MAX_BIRGE):
+            # take the position (and roll test) from the agreeing sectors; detection
+            # counts, the star-by-star chi-squares and the nulls do not depend on the floor
+            keep = ("n_sectors", "n_sectors_detected", "n_sectors_at_bound", "depth_snr",
+                    "hypotheses", "null_margins")
+            comb = {**weak, **{k: comb[k] for k in keep if k in comb}}
+            agreed = True
     hyps = comb["hypotheses"]
     tgt = next(h for h in hyps if h["is_target"])
     best = hyps[0]
@@ -251,11 +275,10 @@ def run(ctx: cli.Context) -> Result:
 
     detected = comb["depth_snr"] >= SNR_MIN and positioned
     # a FAIL needs agreement between sectors, or one sector with many transits
-    robust = (comb["n_sectors_positioned"] >= 2
-              or comb.get("max_transits_positioned", 0) >= MIN_TRANSITS_SINGLE_SECTOR)
+    robust = strict or agreed
     beyond_region = (comb["depth_snr"] >= SNR_MIN and comb.get("n_sectors_at_bound", 0) > 0
                      and comb["n_sectors_at_bound"] >= comb["n_sectors_positioned"])
-    r.metrics.update({"robust_for_fail": robust, "n_sectors_at_bound": comb.get("n_sectors_at_bound"),
+    r.metrics.update({"robust_for_fail": robust, "positioned_by_agreeing_weak_sectors": agreed, "n_sectors_at_bound": comb.get("n_sectors_at_bound"),
                       "n_sectors_detected": comb.get("n_sectors_detected")})
 
     nulls = np.asarray(comb.get("null_margins") or [], float)
@@ -290,7 +313,9 @@ def run(ctx: cli.Context) -> Result:
             f"{'TIC' if len(str(h['id'])) < 12 else 'Gaia DR3'} {h['id']} "
             f"({h['sep_arcsec']:.1f} arcsec, T = {h['tmag']:.1f})")
     where = (f"offset {off:.1f} +/- {sig:.1f} arcsec ({osig:.1f} sigma, {off_px:.2f} px) "
-             f"over {comb.get('n_sectors_positioned')} sector(s)" if positioned else "")
+             f"over {comb.get('n_sectors_positioned')} sector(s)"
+             + (f" that agree, each at S/N {SECTOR_SNR_AGREE:g}-{SECTOR_SNR_MIN:g} or above"
+                if agreed else "") if positioned else "")
 
     thin_note = (f"Only one sector places it, with {comb.get('max_transits_positioned')} "
                  f"transit(s) (fewer than {MIN_TRANSITS_SINGLE_SECTOR}): one systematic in one "

@@ -270,9 +270,18 @@ Q0_MIN = 2.0
 #: How far the GP's rotation period may move from the measured Prot.
 PROT_TOL = 1.3
 
-#: Factor by which the fitted a/R* may depart from the value the star's
-#: density implies.  3 covers e ~ 0.5 or a factor-of-two radius error.
+#: Factor by which the fitted a/R* may exceed the value the star's density
+#: implies (a shorter transit).  3 covers e ~ 0.5 or a factor-of-two radius
+#: error, and grazing geometries.
 A_RS_TOLERANCE = 3.0
+
+#: Factor by which the fitted a/R* may fall BELOW the density value (a longer
+#: transit).  e > 0.1 is rare, especially for young planets,
+#: and e = 0.2 lengthens a transit by at most sqrt((1+e)/(1-e)) = 1.22; a ~30%
+#: density error moves a/R* by ~10%.  At 3 the duration re-seed could chain a
+#: weak signal out to 20+ hours; at 1.4, fits more than 2x the true T14 fell
+#: from 10 to 3 of 150 injections.
+A_RS_TOLERANCE_LONG = 1.4
 
 
 def fit_gp_hyperparameters(t, f, mask_out, min_rho_days: float,
@@ -808,19 +817,19 @@ def joint_fit(t, f, err, period, t0, dur_days, u=(0.42, 0.22),
     rp0 = float(np.sqrt(depth0))
 
     # a/R*, and the range it is allowed to move in.  When the stellar density
-    # is known the range is a factor of A_RS_TOLERANCE around it, which spans
-    # e ~ 0.5 or a factor-of-two radius error -- generous for a young star and
-    # still far too tight for the optimiser to escape into the degenerate
-    # corner.  Left unbounded it does exactly that: a known planet ran away to
-    # a/R* = 294, b = 0.99 and a 0.03-hour transit, which fits a real 2490 ppm
-    # signal as 2 ppm of nothing.  Several 2026 candidates optimised the same
+    # is known the range runs from a0 / A_RS_TOLERANCE_LONG (the longest
+    # transit e ~ 0.2 plus a density error allows) to a0 * A_RS_TOLERANCE --
+    # generous for a young star and still far too tight for the optimiser to
+    # escape into the degenerate corner.  Left unbounded it does exactly that:
+    # a known planet ran away to a/R* = 294, b = 0.99 and a 0.03-hour transit,
+    # which fits a real 2490 ppm signal as 2 ppm of nothing.  Several 2026 candidates optimised the same
     # way, to b ~ 1.2 with depths of 8%.
     if rho_star and rho_star > 0:
         a0 = a_over_rs(period, rho_star)
-        a_lo = max(2.0, a0 / A_RS_TOLERANCE)
+        a_lo = max(2.0, a0 / A_RS_TOLERANCE_LONG)
         a_hi = min(300.0, a0 * A_RS_TOLERANCE)
         a_bound_source = (f"stellar density {rho_star:.3f} g/cm3, "
-                          f"x/{A_RS_TOLERANCE:g}")
+                          f"/{A_RS_TOLERANCE_LONG:g} to x{A_RS_TOLERANCE:g}")
     else:
         s_ = np.sin(np.pi * dur_days / period)    # invert the duration at b = 0
         a0 = float((1 + rp0) / s_) if 0 < s_ < 1 else 15.0
@@ -1295,7 +1304,7 @@ def local_joint_fit(t, f, err, period, t0, dur_days, u=(0.42, 0.22),
 
     if rho_star and rho_star > 0:
         a0 = a_over_rs(period, rho_star)
-        a_lo = max(2.0, a0 / A_RS_TOLERANCE)
+        a_lo = max(2.0, a0 / A_RS_TOLERANCE_LONG)
         a_hi = min(300.0, a0 * A_RS_TOLERANCE)
         a_bound_source = f"stellar density {rho_star:.3f} g/cm3"
     else:

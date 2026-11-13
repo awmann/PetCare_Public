@@ -48,7 +48,7 @@ from ..plotting import C_ALT, C_BAD, C_MODEL, annotate_status, figure, save
 from ..result import Result
 
 TEST = "neighbours"
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 
 #: Cone radius.  Wide enough to reach every star whose PRF wings can land in a
 #: TESS aperture; the depth requirement removes the irrelevant ones.
@@ -511,7 +511,8 @@ def _plot(ctx, r, ra, dec, neighbours, aperture, radius):
     ax.set_xlabel("separation [arcsec]")
     ax.set_ylabel("eclipse depth this star would need")
     ax.set_title("what each neighbour would have to do")
-    ax.legend(loc="lower right", fontsize=6.5)
+    # upper left: the low-depth (most viable) neighbours sit at the bottom
+    ax.legend(loc="upper left", fontsize=6.5)
 
     annotate_status(fig, r)
     r.add_plot(save(fig, ctx.plot_path("neighbours")))

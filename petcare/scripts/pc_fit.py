@@ -29,7 +29,8 @@ import sys
 import numpy as np
 
 from .. import cli, ephem
-from ..fitting import (A_RS_TOLERANCE, FitResult, bin_for_fit, block_labels,
+from ..fitting import (A_RS_TOLERANCE, A_RS_TOLERANCE_LONG, FitResult, bin_for_fit,
+                       block_labels,
                        fit_gp_hyperparameters,
                        fit_gp_hyperparameters_segmented, gp_predict,
                        gp_trend_masked, joint_fit, labels_at,
@@ -42,7 +43,7 @@ from ..result import Result
 from ..stellar import duration_t14, reconcile_density, rho_circ
 
 TEST = "fit"
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 
 #: GP amplitude / transit depth thresholds.  On 71 known planets this ratio
 #: had a median of 2.6 where the GP+transit fit recovered the planet and 10.8
@@ -540,8 +541,9 @@ def run(ctx: cli.Context) -> Result:
                f"T14={fit.t14_h:.2f} h) but a/R* = {fit.a_rs:.1f} sits on the "
                f"bound set by the stellar density "
                f"({fit.detail.get('a_rs_bound_source')}): the duration and the "
-               f"catalogue density disagree by more than a factor of "
-               f"{A_RS_TOLERANCE:g}. The depth is still a measurement; see "
+               f"catalogue density disagree by more than the bound allows "
+               f"(a/R* from /{A_RS_TOLERANCE_LONG:g} to x{A_RS_TOLERANCE:g} the "
+               f"density value). The depth is still a measurement; see "
                f"pc_duration for the eccentricity or radius error that would "
                f"reconcile it")
     else:
