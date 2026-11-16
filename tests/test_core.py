@@ -667,3 +667,38 @@ def test_crossmatch_per_transit_depth_ignores_rotation():
     f[np.abs(x) < dur / 2] -= 1e-3
     m = xm._measure(t, f, P, t0, dur)
     assert abs(m["depth_ppm"] - 1000) < 3 * m["depth_err_ppm"] and m["depth_err_ppm"] < 300
+
+
+def test_epoch_audit_pass_overrules_the_three_masked_gp_tests():
+    from petcare.driver import summarise
+    from petcare.verdict import effective_statuses
+    rec = {"depths": {"status": "FAIL"}, "shapetime": {"status": "FAIL"},
+           "odd_even": {"status": "FAIL"}, "interp": {"status": "FAIL"},
+           "epoch_audit": {"status": "PASS", "metrics": {"oddeven_consistent": True}}}
+    status, over = effective_statuses(rec)
+    assert [status[k] for k in ("depths", "shapetime", "odd_even", "interp")] == \
+        ["FLAG", "FLAG", "FLAG", "FAIL"]
+    assert {o["test"] for o in over} == {"depths", "shapetime", "odd_even"}
+    assert rec["depths"]["status"] == "FAIL"          # records are never edited
+    s = summarise(rec)
+    assert s["counts"]["FAIL"] == 1 and len(s["overruled"]) == 3
+
+
+def test_epoch_audit_fail_overrules_only_a_consistent_odd_even():
+    from petcare.verdict import effective_statuses
+    rec = {"depths": {"status": "FAIL"}, "odd_even": {"status": "FAIL"},
+           "epoch_audit": {"status": "FAIL", "metrics": {"oddeven_consistent": True}}}
+    status, _ = effective_statuses(rec)
+    assert status == {"depths": "FAIL", "odd_even": "FLAG", "epoch_audit": "FAIL"}
+    rec["epoch_audit"] = {"status": "INCONCLUSIVE", "metrics": {}}
+    assert effective_statuses(rec)[0]["odd_even"] == "FAIL"
+
+
+def test_epoch_audit_verdict_thresholds():
+    from petcare.scripts.pc_epochaudit import verdict
+    ok = [{"depth": 0.010, "depth_err": 0.001}] * 4
+    assert verdict(ok, 1.0)["pass"] and verdict(ok, None)["pass"]
+    assert not verdict(ok, 3.5)["pass"]
+    assert verdict(ok[:2], 1.0) is None
+    wild = [{"depth": d, "depth_err": 0.001} for d in (0.002, 0.020, 0.004, 0.018)]
+    assert not verdict(wild, 0.5)["pass"]

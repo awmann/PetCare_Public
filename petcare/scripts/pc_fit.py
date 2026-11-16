@@ -43,7 +43,7 @@ from ..result import Result
 from ..stellar import duration_t14, reconcile_density, rho_circ
 
 TEST = "fit"
-VERSION = "0.2.3"
+VERSION = "0.3.0"
 
 #: GP amplitude / transit depth thresholds.  On 71 known planets this ratio
 #: had a median of 2.6 where the GP+transit fit recovered the planet and 10.8
@@ -53,6 +53,14 @@ VERSION = "0.2.3"
 #: test with an uncalibrated threshold is not finished.
 GP_SIGMA_OVER_DEPTH_FLAG = 8.0
 GP_SIGMA_OVER_DEPTH_INCONCLUSIVE = 20.0
+
+#: The fitted depth and the input (search) depth must agree within this factor,
+#: or the fit FAILS (0.3.0; it was a shortlist cut).  Applies only when the
+#: input table gives a depth.  The two known planets furthest apart are 3.01x
+#: and 3.17x on the same de-diluted flux.  What fails is mostly a fit that grew
+#: into a longer, deeper dip than the search found (median T14 4.3x the
+#: search's): 0 of 53 eye-vetted planet-like or known candidates, 6 rejects.
+DEPTH_AGREE = 3.25
 
 #: Ephemeris drift, in durations at the far end of the baseline, above which
 #: the refinement is large enough that anything folded on the input ephemeris
@@ -521,6 +529,12 @@ def run(ctx: cli.Context) -> Result:
         r.metrics["rp_earth_note"] = "from the light curve's depth, which is already de-diluted"
 
     # ---------------------------------------------------------------- status
+    in_depth = getattr(ctx, "input_depth_ppm", None)
+    depth_ratio = (fit.depth_ppm / in_depth
+                   if in_depth and in_depth > 0 and fit.depth_ppm and np.isfinite(fit.depth_ppm)
+                   else None)
+    r.metrics["input_depth_ppm"] = in_depth
+    r.metrics["depth_over_input"] = depth_ratio
     if not ok:
         if gp_dominated:
             r.inconclusive(
@@ -529,6 +543,11 @@ def run(ctx: cli.Context) -> Result:
                 f"depth={fit.depth_ppm:.0f} ppm as fitted)")
         else:
             r.inconclusive("self-check failed: " + r.self_check["detail"])
+    elif depth_ratio is not None and not 1 / DEPTH_AGREE <= depth_ratio <= DEPTH_AGREE:
+        r.fail(f"fit converged (P={fit.period:.6f} d, T14={fit.t14_h:.2f} h) on a depth of "
+               f"{fit.depth_ppm:.0f} ppm, {depth_ratio:.1f}x the {in_depth:.0f} ppm the "
+               f"search found (allowed within {DEPTH_AGREE:g}x): the fit is not "
+               f"measuring the signal that was detected")
     elif not is_local and np.isfinite(ratio) and ratio > GP_SIGMA_OVER_DEPTH_FLAG:
         r.flag(f"fit converged (P={fit.period:.6f} d, depth={fit.depth_ppm:.0f} ppm, "
                f"T14={fit.t14_h:.2f} h) but the GP amplitude is {ratio:.0f}x the "

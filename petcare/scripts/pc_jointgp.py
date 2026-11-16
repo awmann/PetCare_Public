@@ -63,7 +63,7 @@ from ..plotting import C_BAD, C_BINNED, C_MODEL, annotate_status, figure, save
 from ..result import Result, Status
 
 TEST = "jointgp"
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 #: Half-width of each transit's window, in T14, with a floor in days, so the GP
 #: sees enough out-of-transit flux on both sides to pin itself down.
@@ -85,8 +85,12 @@ RESTRAINT = 0.1
 NULL_PHASES = np.linspace(0.15, 0.85, 16)
 NULL_MIN_SEP_T14 = 3.0
 NULL_MIN = 5
-#: Calibrated significance.
-CAL_FAIL_SIGMA = 3.0
+#: Calibrated significance.  FAIL below CAL_FAIL_SIGMA: 3.0 was the prototype's cut,
+#: raised to 4.0 in 0.3.0.  On our benchmark that moves injected planets wrongly
+#: failed from 37 to 59 of 300, known planets from 5 to 6 of 49, eye-vetted
+#: planet-like candidates from 3 to 5 of 45, and eye-vetted rejects from 16 to 24
+#: of 103 (5.0 would give 81, 9, 7 and 36).
+CAL_FAIL_SIGMA = 4.0
 CAL_PASS_SIGMA = 5.0
 #: 0.1.x grading, used only when there are too few nulls.  Calibrated on a
 #: benchmark of 22 known young planets: all 21 with more than one transit score

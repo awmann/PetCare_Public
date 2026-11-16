@@ -176,6 +176,7 @@ Tiered by cost. Tiers 0 and 1 are cheap enough to run on everything.
 | `pc-interp` | is the dip larger than what the GP interpolation across the mask invents at random times on this star? |
 | `pc-jointgp` | is each transit significant when fitted jointly with the variability, nothing masked? |
 | `pc-uniqueness` | is the dip unique in the fold, and a dip (ModShift, SHP)? |
+| `pc-epochaudit` | do the transits agree when each is fitted together with the star's variability? Overrules a FAIL from `pc-depths`, `pc-shapetime` or `pc-oddeven` when they do |
 | `pc-flares` | is the fold carried by flare-adjacent cadences? |
 | `pc-instrument` | does the signal track the spacecraft rather than the star? |
 

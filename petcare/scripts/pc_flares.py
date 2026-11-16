@@ -43,7 +43,7 @@ from ..plotting import (C_BAD, C_BINNED, C_MODEL, C_OK, annotate_status,
 from ..result import Result
 
 TEST = "flares"
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 #: Depth change, as a fraction of the unmasked depth, worth flagging.
 DEPTH_CHANGE_FLAG = 0.25
@@ -193,12 +193,17 @@ def run(ctx: cli.Context) -> Result:
             f"{fl['sigma_ppm']:.0f} ppm; symmetric scatter "
             f"{fl['symmetric_sigma_ppm']:.0f} ppm")
 
-    if not ok:
-        r.inconclusive("self-check failed: " + r.self_check["detail"])
-    elif rise:
-        r.flag(rise_msg + f"Depth with flares masked {0 if change is None else change:+.0%}; "
+    if rise:
+        # 0.3.0: a FAIL (it was a FLAG that our shortlist cut on).  On our
+        # eye-vetted survey candidates it fires on 0 of 53 planet-like or known
+        # and 15 of 129 rejects.  Judged before the self-check: that one is
+        # about the flare search (no flares found fails it), and the rise is
+        # measured on the folded light curve whatever the flare search found.
+        r.fail(rise_msg + f"Depth with flares masked {0 if change is None else change:+.0%}; "
                f"{0 if not np.isfinite(in_frac) else in_frac:.0%} of in-transit "
                f"cadences flare-affected. {note}")
+    elif not ok:
+        r.inconclusive("self-check failed: " + r.self_check["detail"])
     elif change is not None and abs(change) > DEPTH_CHANGE_FLAG:
         # Direction matters, and they mean opposite things.  Shallower with
         # flares masked means the flares were *making* the signal, which is

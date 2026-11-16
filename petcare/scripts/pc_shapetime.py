@@ -54,7 +54,7 @@ from ..plotting import C_ALT, C_BINNED, C_MODEL, C_OK, annotate_status, figure, 
 from ..result import Result
 
 TEST = "shapetime"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 #: Fit window, in transit durations either side of mid-transit.
 WINDOW_T14 = 2.5
@@ -270,7 +270,11 @@ def run(ctx: cli.Context) -> Result:
     if not ok:
         r.inconclusive("the per-group fits did not return usable errors. " + desc)
     elif dur_extra > DURATION_EXTRA_FLAG:
-        r.flag(f"the transit's duration changes over time by more than "
+        # 0.2.0: a FAIL.  The masked-GP detrending alone can stretch single
+        # epochs on active stars, so a driver that fits each epoch jointly
+        # with the variability (the per-epoch audit) may overrule this: three
+        # planet-like candidates read 44-67% here and are consistent there.
+        r.fail(f"the transit's duration changes over time by more than "
                f"calibration, cadence or timing can explain -- what stellar "
                f"variability does and a planet does not. {desc}")
     else:

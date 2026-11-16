@@ -2,7 +2,9 @@
 
 It runs each test by building that test's own argument parser and calling its
 ``run(ctx)``.  Nothing is reimplemented here, and the driver has no vetting
-logic of its own -- it merges JSONs, it does not re-derive anything.  A test
+logic of its own -- it merges JSONs, it does not re-derive anything.  The one
+place a test's status is superseded by another's is ``petcare.verdict`` (the
+per-epoch audit), and the summary lists every case.  A test
 must behave identically whether it is invoked from here or from the command
 line, and reusing its parser is what guarantees that.
 
@@ -29,6 +31,7 @@ from pathlib import Path
 from . import cli
 from . import metrics as vetting_metrics
 from .result import Status, utc_now
+from .verdict import effective_statuses
 
 #: Every test, with its tier and whether it consumes ``pc_fit``'s output.
 #: Tier 0 is catalogue-only, 1 is light-curve-only, 2 needs pixels, 3 hits
@@ -54,6 +57,8 @@ TESTS = [
     ("jointgp",    "pc_jointgp",    1, True),
     ("uniqueness", "pc_uniqueness", 1, True),
     ("flares",     "pc_flares",     1, True),
+    # after the three tests it overrules, so it can see whether one of them failed
+    ("epoch_audit", "pc_epochaudit", 1, True),
     ("centroid",   "pc_centroid",   2, True),
     ("pixels",     "pc_pixels",     2, True),
     ("archival",   "pc_archival",   3, True),
@@ -247,26 +252,28 @@ def _argv(target, candidate, opts, uses_fit) -> list:
 
 def summarise(records: dict) -> dict:
     """Counts by status, and the tests that objected, worst first."""
+    # The statuses counted are the effective ones: a passing per-epoch audit
+    # turns the FAIL of a test it overrules into a FLAG (petcare.verdict).  The
+    # records themselves are untouched, and "overruled" says what changed.
+    status, overruled = effective_statuses(records)
     counts = {s: 0 for s in Status.ALL}
-    for rec in records.values():
-        counts[rec.get("status", Status.ERROR)] = \
-            counts.get(rec.get("status", Status.ERROR), 0) + 1
+    for st in status.values():
+        counts[st] = counts.get(st, 0) + 1
 
     def sev(item):
-        return Status.SEVERITY.get(item[1].get("status"), 9)
+        return Status.SEVERITY.get(status[item[0]], 9)
 
     ranked = sorted(records.items(), key=sev)
     return {
         "counts": counts,
         "n_tests": len(records),
         "objections": [
-            {"test": n, "status": rec.get("status"), "reason": rec.get("reason")}
+            {"test": n, "status": status[n], "reason": rec.get("reason")}
             for n, rec in ranked
-            if rec.get("status") in (Status.FAIL, Status.FLAG, Status.ERROR)],
-        "inconclusive": [n for n, rec in records.items()
-                         if rec.get("status") == Status.INCONCLUSIVE],
-        "passed": [n for n, rec in records.items()
-                   if rec.get("status") == Status.PASS],
+            if status[n] in (Status.FAIL, Status.FLAG, Status.ERROR)],
+        "overruled": overruled,
+        "inconclusive": [n for n in records if status[n] == Status.INCONCLUSIVE],
+        "passed": [n for n in records if status[n] == Status.PASS],
     }
 
 

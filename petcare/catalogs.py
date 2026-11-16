@@ -94,6 +94,40 @@ _GAIA_COLUMNS_MINIMAL = (
 SYNC_ROW_CAP = 2000
 
 
+#: ESA's Gaia archive was unreachable for much of 2026-11-10..15: every cone
+#: failed, pc_centroid swallowed the error as "no catalogue match" and 605
+#: surviving candidates went unlocalised.  ARI Heidelberg mirrors
+#: gaiadr3.gaia_source with the same column names; MAXREC keeps its row cap
+#: equal to ESA's, so gaia_cone's dense-field logic is unchanged.
+GAIA_ESA_PING = "https://gea.esac.esa.int/tap-server/tap/availability"
+GAIA_MIRROR_SYNC = "https://gaia.ari.uni-heidelberg.de/tap/sync"
+_esa_up = None
+
+
+def _esa_gaia_up() -> bool:
+    """Whether ESA's TAP answers, checked once per process (importing
+    astroquery.gaia alone blocks for over a minute when it does not)."""
+    global _esa_up
+    if _esa_up is None:
+        import requests
+        try:
+            _esa_up = requests.get(GAIA_ESA_PING, timeout=10).status_code == 200
+        except Exception:  # noqa: BLE001
+            _esa_up = False
+    return _esa_up
+
+
+def _gaia_mirror(adql: str) -> list:
+    import io
+    import requests
+    from astropy.table import Table
+    resp = requests.post(GAIA_MIRROR_SYNC, timeout=120, data={
+        "REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "votable", "MAXREC": SYNC_ROW_CAP,
+        "QUERY": adql})
+    resp.raise_for_status()
+    return _to_dicts(Table.read(io.BytesIO(resp.content), format="votable"))
+
+
 def gaia_cone(ra: float, dec: float, radius_arcsec: float = 120.0,
               g_limit: float = 20.5):
     """Gaia DR3 sources within ``radius_arcsec``, as a list of dicts.  Cached."""
@@ -101,20 +135,30 @@ def gaia_cone(ra: float, dec: float, radius_arcsec: float = 120.0,
     radius_deg = radius_arcsec / 3600.0
 
     def _select(rad_deg, extra=""):
-        from astroquery.gaia import Gaia
         where = (f"WHERE 1 = CONTAINS(POINT('ICRS', ra, dec), "
                  f"CIRCLE('ICRS', {ra:.7f}, {dec:.7f}, {rad_deg:.7f})) "
                  f"AND phot_g_mean_mag < {g_limit}")
         last = None
         for cols in (_GAIA_COLUMNS, _GAIA_COLUMNS_MINIMAL):
+            adql = f"SELECT {cols} FROM gaiadr3.gaia_source {where}{extra}"
+            if not _esa_gaia_up():
+                try:
+                    return _gaia_mirror(adql)
+                except Exception as exc:  # noqa: BLE001 - retried with fewer columns
+                    last = exc
+                    continue
             try:
+                from astroquery.gaia import Gaia
                 # Synchronous, not async: the async endpoint returns HTTP 500
                 # on cones this small often enough to be a nuisance.
-                job = Gaia.launch_job(
-                    f"SELECT {cols} FROM gaiadr3.gaia_source {where}{extra}")
+                job = Gaia.launch_job(adql)
                 return _to_dicts(job.get_results())
             except Exception as exc:  # noqa: BLE001 - retried with fewer columns
                 last = exc
+                try:
+                    return _gaia_mirror(adql)
+                except Exception:  # noqa: BLE001 - the ESA error is the one to report
+                    pass
         raise last
 
     def _query():
@@ -145,9 +189,11 @@ def gaia_source(source_id: int):
     ensure_certificates()
 
     def _query():
-        from astroquery.gaia import Gaia
         adql = (f"SELECT {_GAIA_COLUMNS} FROM gaiadr3.gaia_source "
                 f"WHERE source_id = {int(source_id)}")
+        if not _esa_gaia_up():
+            return _gaia_mirror(adql)
+        from astroquery.gaia import Gaia
         return _to_dicts(Gaia.launch_job(adql).get_results())
 
     rows = cached("gaia_source", int(source_id))(

@@ -47,11 +47,17 @@ from ..stellar import (
 )
 
 TEST = "duration"
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 
 #: Required eccentricity above which the duration is worth a human's attention.
 #: Young multis are not expected to be this eccentric, but nor is this a cut.
 ECC_FLAG = 0.4
+
+#: T14 at least this many times the longest a central transit of a circular
+#: orbit allows FAILS (0.2.0).  Among our eye-vetted survey candidates the
+#: planet-like and known ones reach 1.11 at most; at 2 or more there are none
+#: of 53, and what is there is variability or a dip-like event the fit grew into.
+DURATION_FAIL_RATIO = 2.0
 
 #: Required fractional stellar-radius error above which the same applies.
 #: 30% is larger than the disagreement between the TIC and the literature for
@@ -242,6 +248,12 @@ def run(ctx: cli.Context) -> Result:
                f"{rp_rj / ceiling:.1f} for this to be "
                f"planetary. T14 = {t14_h:.2f} h against "
                f"{t_min * 24:.2f}-{t_max * 24:.2f} h allowed.{rv}")
+    elif t_max and t14_days >= DURATION_FAIL_RATIO * t_max:
+        r.fail(f"T14 = {t14_h:.2f} h is {t14_days / t_max:.1f}x the longest a central "
+               f"transit allows ({t_max * 24:.2f} h for rho* = {rho_star:.3f} g/cm3): "
+               f"no plausible eccentricity or radius error makes a transit this long"
+               + (f" (it would take e >= {ecc_req:.2f})" if ecc_req is not None else "")
+               + "; this is the duration of stellar variability or a dip, not a transit.")
     elif rp_rj is not None and rp_rj > ceiling:
         why = ("the depth is the input table's, because the fit did not converge"
                if depth_unverified else

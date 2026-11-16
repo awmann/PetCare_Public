@@ -33,16 +33,26 @@ from ..plotting import (C_ALT, C_BINNED, C_MODEL, annotate_status,
 from ..result import Result
 
 TEST = "odd_even"
-VERSION = "0.1.0"
+VERSION = "0.2.1"
 
 #: Sigma above which a human should look.  Set from the cost measured on this
 #: sample: 2 sigma would flag 32% of known planets, 3 sigma 18%, 5 sigma 5%.
 #: 3 is the conventional value and is kept because this is a flag, not a cut.
 ODD_EVEN_FLAG_SIGMA = 3.0
 
-#: Above this the difference is large enough to name in the reason line as a
-#: likely binary, still without failing the candidate.
+#: Above this the candidate FAILS (0.2.0; it was a flag our shortlist cut
+#: on).  The masked-GP depths this test uses reach 6.5-7.6 sigma on two known
+#: planets with spot crossings, and 4.8 on a third, so a driver that fits each
+#: epoch jointly with the variability (the per-epoch audit, cut at 3 sigma)
+#: should overrule this FAIL when that audit can judge.
 ODD_EVEN_STRONG_SIGMA = 5.0
+#: When no sector holds both an odd and an even transit the difference could be a
+#: sector-to-sector one (dilution, aperture, detrending), so until 0.2.1 the test
+#: declined to judge.  It now judges but asks for more: the deeper
+#: parity must be at least this many times the shallower one, which no sector
+#: effect produces.  The 26 surviving survey candidates this applies to at 5 sigma
+#: have 20-39 d periods, 2-4 transits per parity and depth ratios of 1.6-20.
+CONFOUNDED_MIN_RATIO = 1.5
 
 #: Both parities need at least this many transits, or the comparison is
 #: between a mean and a single measurement.
@@ -138,9 +148,9 @@ def run(ctx: cli.Context) -> Result:
     confounded = bool(odd_sectors and even_sectors and not (odd_sectors & even_sectors))
     if confounded:
         checks.append(f"parities do not share a sector (odd: {sorted(odd_sectors)}, "
-                      f"even: {sorted(even_sectors)}); any difference is "
-                      f"indistinguishable from a sector-to-sector one")
-        ok = False
+                      f"even: {sorted(even_sectors)}); a difference under "
+                      f"{CONFOUNDED_MIN_RATIO:g}x could be a sector-to-sector one")
+    r.metrics["parities_share_sector"] = not confounded
     if not np.isfinite(sigma):
         checks.append("difference significance undefined")
         ok = False
@@ -152,12 +162,18 @@ def run(ctx: cli.Context) -> Result:
 
     if not ok:
         r.inconclusive("self-check failed: " + r.self_check["detail"])
-    elif sigma >= ODD_EVEN_STRONG_SIGMA:
+    elif (sigma >= ODD_EVEN_STRONG_SIGMA and confounded
+          and shallower > 0 and deeper / shallower < CONFOUNDED_MIN_RATIO):
         r.flag(f"odd and even depths differ by {sigma:.1f} sigma "
+               f"({d_odd:.0f} +/- {e_odd:.0f} vs {d_even:.0f} +/- {e_even:.0f} ppm), but no "
+               f"sector holds both parities and the ratio is under {CONFOUNDED_MIN_RATIO:g}x: "
+               f"this could be a sector-to-sector difference. {noise_note}")
+    elif sigma >= ODD_EVEN_STRONG_SIGMA:
+        r.fail(f"odd and even depths differ by {sigma:.1f} sigma "
                f"({d_odd:.0f} +/- {e_odd:.0f} vs {d_even:.0f} +/- {e_even:.0f} ppm): "
                f"consistent with an eclipsing binary at P = {2 * p.period:.5f} d. "
-               f"Not a refutation -- two known planets in this sample exceed "
-               f"7 sigma here from spot crossings. {noise_note}")
+               f"Spot crossings under a masked GP can do this to a real planet; "
+               f"a per-epoch joint fit is the check. {noise_note}")
     elif sigma >= ODD_EVEN_FLAG_SIGMA:
         r.flag(f"odd and even depths differ by {sigma:.1f} sigma "
                f"({d_odd:.0f} +/- {e_odd:.0f} vs {d_even:.0f} +/- {e_even:.0f} ppm); "
@@ -241,7 +257,7 @@ def _f(x):
 def main(argv=None) -> int:
     ap = add_arguments(cli.base_parser(
         TEST, "Do odd and even transits have the same depth? Flags a possible "
-              "eclipsing binary at twice the period; never fails a candidate."))
+              "eclipsing binary at twice the period; fails at 5 sigma."))
     args = ap.parse_args(argv)
     ctx = cli.Context.from_args(args)
     r = ctx.result(TEST, VERSION)

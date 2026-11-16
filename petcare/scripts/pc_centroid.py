@@ -52,7 +52,7 @@ from ..plotting import annotate_status, figure, save
 from ..result import Result
 
 TEST = "centroid"
-VERSION = "0.2.4"
+VERSION = "0.3.0"
 
 #: Cutout size in pixels.
 DEFAULT_CUTOUT = 15
@@ -93,6 +93,14 @@ OFFSET_SIGMA_FAIL_STAR = 4.0
 #: offset points at a star that can make the depth, or when it is about a
 #: pixel off and the answer is obvious; otherwise flag.
 OFFSET_FAR_PIX, OFFSET_NEAR_PIX = 1.0, 0.5
+#: 0.3.0: what used to be a "possibly off target" FLAG -- which our shortlist
+#: cut on anyway -- FAILS when a catalogued star that could produce the depth
+#: beats the target beyond the flag-level null, or when the
+#: offset is at least this many pixels (5.3 arcsec).  Smaller offsets with no
+#: star named stay a FLAG, a warning only: an unresolved pair reads 3.7 sigma
+#: at 0.09 px on one TOI.  Offsets that turn with the spacecraft stay a FLAG.
+#: On our eye-vetted survey candidates this fails 0 of 53 planet-like or known.
+OFFSET_FAIL_PIX = 0.25
 #: Chi-square margin by which a neighbour must beat the target to be named
 #: the source (FAIL) or suspected (FLAG), and by which a viable neighbour must
 #: lose to the target to count as excluded.  Chi-squares are scaled by each
@@ -340,6 +348,12 @@ def run(ctx: cli.Context) -> Result:
         r.inconclusive(f"the transit is detected in the pixels ({comb['depth_snr']:.1f} sigma) but "
                        f"its fitted centre runs to the edge of the search box in the one sector "
                        f"that detects it. " + thin_note)
+    elif beyond_region and star_ok and margin >= dchi2_flag:
+        r.fail(f"off target: the transit is detected in the pixels ({comb['depth_snr']:.1f} "
+               f"sigma), the fitted centre runs to the edge of the search box in "
+               f"{comb['n_sectors_at_bound']} of {comb['n_sectors_detected']} detecting "
+               f"sector(s), and {name(best)} fits the depth image better than the target "
+               f"by delta-chi2 = {margin:.0f} (flag-level null {dchi2_flag:.0f}).")
     elif beyond_region:
         r.flag(f"the transit is detected in the pixels ({comb['depth_snr']:.1f} sigma), but in "
                f"{comb['n_sectors_at_bound']} of {comb['n_sectors_detected']} detecting sector(s) "
@@ -389,14 +403,23 @@ def run(ctx: cli.Context) -> Result:
         why = ""
         if osig >= OFFSET_SIGMA_FAIL and off_px >= OFFSET_NEAR_PIX and not star_ok:
             why = (f" Significant, but under {OFFSET_FAR_PIX:g} px with no catalogued star there "
-                   f"that could produce the depth, so it is a flag, not a kill.")
+                   f"that could produce the depth.")
         elif star_ok and margin >= dchi2_flag and margin < dchi2_fail:
             why = (f" The margin is within what chance gives when the signal is on the target "
-                   f"({dchi2_fail:.0f}), so it is a flag, not a kill.")
-        r.flag(f"possibly off target: {where}; "
+                   f"({dchi2_fail:.0f}).")
+        named = star_ok and margin >= dchi2_flag
+        msg = (f"{where}; "
                + (f"{name(best)} fits better than the target by delta-chi2 = {margin:.0f}."
                   if not best["is_target"] else "the target is still the best catalogued star.")
                + why)
+        if named or off_px >= OFFSET_FAIL_PIX:
+            r.fail("off target: " + msg
+                   + (f" A star that could produce the depth is named (flag-level null "
+                      f"{dchi2_flag:.0f})." if named else
+                      f" The offset is {off_px:.2f} px, at or beyond {OFFSET_FAIL_PIX:g} px."))
+        else:
+            r.flag("possibly off target: " + msg
+                   + f" Under {OFFSET_FAIL_PIX:g} px with no star named: a warning only.")
     else:
         open_ = [h for h in hyps if not h["is_target"] and h["viable"]
                  and h["chi2"] - tgt["chi2"] < DCHI2_EXCLUDE]
