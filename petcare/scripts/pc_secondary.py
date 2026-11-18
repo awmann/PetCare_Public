@@ -46,7 +46,7 @@ from ..plotting import (C_ALT, C_BAD, C_BINNED, C_MODEL, C_OK, annotate_status,
 from ..result import Result
 
 TEST = "secondary"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 #: Significance at which a dip away from the transit is worth a human's time.
 #: PROVISIONAL: 4 sigma on a phase scan of a few hundred trials expects ~0.01
@@ -69,6 +69,26 @@ ELLIPSOIDAL_FLAG_SIGMA = 4.0
 #: PROVISIONAL: 2000 ppm is deliberately conservative, leaving the ambiguous
 #: band 2000 ppm and below as a FLAG rather than a refutation.
 SECONDARY_FAIL_DEPTH_PPM = 2000.0
+
+#: Box widths scanned, as fractions of the transit duration.  A secondary need not last as
+#: long as the primary: on an eccentric or grazing binary it can be much shorter, and the
+#: fitted transit duration can itself be too long.  On one double-lined binary: 2.8 sigma in a
+#: full-width box, 7.0 sigma at half width, at the same phase (0.614) at every width.
+#: The full-width scan is reported exactly as before; the narrower ones can only add.
+NARROW_WIDTHS = (0.7, 0.5, 0.35)
+
+#: A narrow-box detection counts only if the neighbouring widths see a dip at the same
+#: phase (within half a transit duration) at this significance.  Without it the deepest
+#: narrow dip is noise: on 584 shortlisted candidates the best phase jumped between widths
+#: and 97 "failed", two of them judged planet-like by eye; with it, 37 and one (the binary).
+NARROW_AGREE_SIGMA = 4.0
+
+#: ...and only if the eclipse repeats: the median of the per-epoch depths at that phase must
+#: reach this fraction of the detected depth.  The scan's clipped mean can be carried by one
+#: or two epochs when there are only four or five: one "4650 ppm at 6.3 sigma" was one
+#: epoch at 13,000 ppm and three near 1,000; another "12.8%" was two of five.  The binary
+#: above has 7 of 7 epochs between 3,400 and 8,000 ppm, median 0.95 of the depth.
+NARROW_EPOCH_MEDIAN_FRAC = 0.5
 
 #: Epochs a trial phase needs before its depth is a measurement.  A real
 #: eclipse repeats; below this there is no way to tell one from a single bad
@@ -124,23 +144,12 @@ def run(ctx: cli.Context) -> Result:
     ctx.attach_lc_provenance(r, lc)
     ctx.notes.extend(p.notes)
 
-    dur = p.duration_days
+    full_dur = p.duration_days
     period = p.period
-    guard = float(getattr(a, "guard_durations", 2.0)) * dur / period  # in phase
-
-    n_phase = int(getattr(a, "n_phase", 0) or 0)
-    if n_phase <= 0:
-        n_phase = int(np.clip(round(4.0 * period / dur), 40, 600))
-
-    # ---- the phase scan ---------------------------------------------------
-    phases = np.linspace(0.0, 1.0, n_phase, endpoint=False)
-    depths = np.full(n_phase, np.nan)
-    n_in = np.zeros(n_phase, dtype=int)
-
+    guard = float(getattr(a, "guard_durations", 2.0)) * full_dur / period  # in phase
     ph_frac = ephem.phase_frac(p.t, period, p.t0)
-    half = 0.5 * 0.8 * dur / period          # in phase units
-    base_lo, base_hi = 0.75 * dur / period, 3.0 * dur / period
-    prim = np.abs(_wrap(ph_frac)) < base_lo
+    # the primary is masked at its full width whatever box is scanned
+    prim = np.abs(_wrap(ph_frac)) < 0.75 * full_dur / period
 
     # Everything that is a transit of something already known: the candidate
     # itself, and every other signal on this star.  Without the second part
@@ -149,7 +158,7 @@ def run(ctx: cli.Context) -> Result:
     # 0.250", which is one of its three siblings landing there when folded on
     # its period.
     others = [k for k in (ctx.known or [])
-              if not ephem.match_known(period, p.t0, dur * 24, [k],
+              if not ephem.match_known(period, p.t0, full_dur * 24, [k],
                                        float(p.t.min()), float(p.t.max()))]
     known_m = (ephem.mask_known_transits(p.t, others, width=2.0)
                if others else np.zeros(p.t.size, bool))
@@ -165,72 +174,136 @@ def run(ctx: cli.Context) -> Result:
             f"secondary; a sibling planet folded on this period looks exactly "
             f"like one")
 
-    for i, ph0 in enumerate(phases):
-        d = _wrap(ph_frac - ph0)
-        in_m = np.abs(d) < half
-        oot_m = (np.abs(d) >= base_lo) & (np.abs(d) < base_hi)
-        # never let the primary transit into a trial's baseline
-        oot_m &= ~prim
-        if in_m.sum() < 10 or oot_m.sum() < 30:
-            continue
-        # a trial phase where a known signal sits is not measurable here
-        if in_m.sum() and known_m[in_m].mean() > 0.3:
-            continue
-        n_in[i] = int(in_m.sum())
-        depths[i] = _local_depth_at(p, ph0, half, base_lo, base_hi,
-                                    exclude=exclude)
+    def scan(frac):
+        """The phase scan with a box ``frac`` of the transit duration wide."""
+        dur = full_dur * frac
+        n_phase = int(getattr(a, "n_phase", 0) or 0)
+        if n_phase <= 0:
+            n_phase = int(np.clip(round(4.0 * period / dur), 40, 600))
+        phases = np.linspace(0.0, 1.0, n_phase, endpoint=False)
+        depths = np.full(n_phase, np.nan)
+        n_in = np.zeros(n_phase, dtype=int)
+        half = 0.5 * 0.8 * dur / period          # in phase units
+        base_lo, base_hi = 0.75 * dur / period, 3.0 * dur / period
+        for i, ph0 in enumerate(phases):
+            d = _wrap(ph_frac - ph0)
+            in_m = np.abs(d) < half
+            oot_m = (np.abs(d) >= base_lo) & (np.abs(d) < base_hi)
+            # never let the primary transit into a trial's baseline
+            oot_m &= ~prim
+            if in_m.sum() < 10 or oot_m.sum() < 30:
+                continue
+            # a trial phase where a known signal sits is not measurable here
+            if in_m.sum() and known_m[in_m].mean() > 0.3:
+                continue
+            n_in[i] = int(in_m.sum())
+            depths[i] = _local_depth_at(p, ph0, half, base_lo, base_hi,
+                                        exclude=exclude)
+        # How much of an eclipse does this scan actually return?  Measured before
+        # anything is read off it, and applied to the depths.
+        inj_depth = max(RECOVERY_DEPTH_MIN_PPM,
+                        RECOVERY_DEPTH_FRAC * (ctx.candidate.depth_ppm or 0.0))
+        trial_phases = [ph for ph in (0.25, 0.5, 0.75) if min(ph, 1 - ph) > guard]
+        recovery, n_trials = _recovery_check(p, trial_phases, inj_depth,
+                                             base_lo, half, prim, exclude)
+        if n_trials and np.isfinite(recovery) and recovery >= MIN_RECOVERY:
+            depths = depths / recovery
+        good = np.isfinite(depths)
+        away = good & (np.minimum(phases, 1 - phases) > guard)
+        out = {"frac": frac, "n_phase": n_phase, "phases": phases, "depths": depths, "n_in": n_in,
+               "away": away, "recovery": recovery, "n_trials": n_trials, "inj_depth": inj_depth,
+               "trial_phases": trial_phases, "usable": False}
+        if away.sum() < 20:
+            return out
+        measured = float(1.4826 * np.median(np.abs(depths[away] - np.median(depths[away]))))
+        n_typical = float(np.median(n_in[away]))
+        white_pred = (p.white_ppm / np.sqrt(n_typical)
+                      if np.isfinite(n_typical) and n_typical > 0 else np.nan)
+        sigma = float(np.nanmax([measured, white_pred]))
+        offset = float(np.median(depths[away]))
+        z = (depths - offset) / sigma if sigma > 0 else np.full(n_phase, np.nan)
+        i_best = int(np.nanargmax(np.where(away, z, -np.inf)))
+        out.update(measured=measured, n_typical=n_typical, white_pred=white_pred, sigma=sigma,
+                   offset=offset, z=z, i_best=i_best, best_phase=float(phases[i_best]),
+                   best_depth=float(depths[i_best] - offset), best_z=float(z[i_best]),
+                   usable=bool(n_typical >= 20 and sigma > 0 and np.isfinite(sigma) and n_trials
+                               and np.isfinite(recovery) and recovery >= MIN_RECOVERY))
+        return out
 
-    # How much of an eclipse does this scan actually return?  Measured before
-    # anything is read off it, and applied to the depths -- a scan that
-    # recovers 70% of what it is given is under-reporting every depth and
-    # every limit by the same factor.
-    inj_depth = max(RECOVERY_DEPTH_MIN_PPM,
-                    RECOVERY_DEPTH_FRAC * (ctx.candidate.depth_ppm or 0.0))
-    trial_phases = [ph for ph in (0.25, 0.5, 0.75) if min(ph, 1 - ph) > guard]
-    recovery, n_trials = _recovery_check(p, trial_phases, inj_depth,
-                                         base_lo, half, prim, exclude)
+    S = scan(1.0)
+    n_phase, phases, depths, n_in, away = S["n_phase"], S["phases"], S["depths"], S["n_in"], S["away"]
+    recovery, n_trials, inj_depth, trial_phases = S["recovery"], S["n_trials"], S["inj_depth"], S["trial_phases"]
     r.metrics["recovery"] = {
         "injected_ppm": inj_depth, "phases": trial_phases,
         "n_trials": n_trials, "median_fraction_recovered": _f(recovery),
         "threshold": MIN_RECOVERY,
         "note": ("depths and limits below are divided by this, so they are "
                  "in true-depth units")}
-    if n_trials and np.isfinite(recovery) and recovery >= MIN_RECOVERY:
-        depths = depths / recovery
-
-    good = np.isfinite(depths)
-    away = good & (np.minimum(phases, 1 - phases) > guard)
     if not cli.require(r, away.sum() >= 20,
                        f"only {int(away.sum())} usable phases outside the "
                        f"transit; the scan needs at least 20"):
         r.set_self_check(False, f"{int(away.sum())} usable phases")
         return r
-
-    # The scatter across phases *is* the uncertainty at any one phase: it
-    # contains the residual stellar variability and the baseline error, which
-    # a photon-noise estimate does not.  But it is floored at the white-noise
-    # prediction, because the GP is a conditional mean and has already removed
-    # some genuinely random power -- without the floor the scan reported an
-    # 18 ppm three-sigma limit on a star whose white noise alone allows 33.
-    measured = float(1.4826 * np.median(np.abs(depths[away] -
-                                               np.median(depths[away]))))
-    n_typical = float(np.median(n_in[away])) if away.any() else np.nan
-    white_pred = (p.white_ppm / np.sqrt(n_typical)
-                  if np.isfinite(n_typical) and n_typical > 0 else np.nan)
-    sigma = float(np.nanmax([measured, white_pred]))
+    measured, n_typical, white_pred, sigma, offset, z = (S[k] for k in
+        ("measured", "n_typical", "white_pred", "sigma", "offset", "z"))
     sigma_source = ("scatter across phases" if measured >= (white_pred or 0)
                     else "white-noise floor (the phase scatter was below it)")
-    offset = float(np.median(depths[away]))
-    z = (depths - offset) / sigma if sigma > 0 else np.full(n_phase, np.nan)
-
-    i_best = int(np.nanargmax(np.where(away, z, -np.inf)))
-    best_phase = float(phases[i_best])
-    best_depth = float(depths[i_best] - offset)
-    best_z = float(z[i_best])
+    i_best, best_phase, best_depth, best_z = S["i_best"], S["best_phase"], S["best_depth"], S["best_z"]
 
     # phase 0.5 specifically, for the circular case
     i_half = int(np.argmin(np.abs(phases - 0.5)))
     z_half = float(z[i_half]) if np.isfinite(z[i_half]) else np.nan
+
+    # ---- narrower boxes ---------------------------------------------------
+    scans = {1.0: S}
+    for fr in NARROW_WIDTHS:
+        try:
+            scans[fr] = scan(fr)
+        except Exception as exc:  # noqa: BLE001 -- a narrow scan can only add
+            ctx.notes.append(f"narrow-box scan at {fr:g} x duration failed: {exc!r}")
+    order = sorted(scans, reverse=True)
+    tol = 0.5 * full_dur / period
+
+    def z_near(sc, ph0):
+        if not sc.get("usable"):
+            return None
+        m = (np.abs(_wrap(sc["phases"] - ph0)) <= tol) & sc["away"]
+        return float(np.nanmax(sc["z"][m])) if m.any() and np.isfinite(sc["z"][m]).any() else None
+
+    narrow, narrow_epochs, widths_metric = None, None, []
+    for i, fr in enumerate(order):
+        sc = scans[fr]
+        row = {"width_fraction": fr, "width_h": _f(full_dur * 24 * fr), "usable": bool(sc.get("usable"))}
+        if "best_z" in sc:
+            row.update(best_phase=sc["best_phase"], best_depth_ppm=_f(sc["best_depth"]), best_sigma=_f(sc["best_z"]),
+                       sigma_ppm=_f(sc["sigma"]), cadences_per_trial=_f(sc["n_typical"]),
+                       recovery=_f(sc["recovery"]))
+        if fr < 1.0 and sc.get("usable"):
+            nb = [z_near(scans[order[j]], sc["best_phase"]) for j in (i - 1, i + 1) if 0 <= j < len(order)]
+            nb = [x for x in nb if x is not None]
+            row["neighbour_sigma_at_phase"] = [_f(x) for x in nb]
+            row["agrees"] = bool(nb and min(nb) >= NARROW_AGREE_SIGMA)
+            if row["agrees"] and sc["best_z"] >= SECONDARY_STRONG_SIGMA:
+                dur_w = full_dur * fr
+                _, _, eps_w = _epoch_residuals(p, sc["best_phase"], 0.5 * 0.8 * dur_w / period,
+                                               0.75 * dur_w / period, 3.0 * dur_w / period, exclude=exclude)
+                ed = np.array([e[1] for e in eps_w], float)
+                row["n_epochs"] = int(ed.size)
+                row["n_epochs_dipping"] = int((ed > 0).sum())
+                row["epoch_median_over_depth"] = (_f(np.median(ed) / sc["best_depth"])
+                                                  if ed.size and sc["best_depth"] > 0 else None)
+                row["repeats"] = bool(ed.size >= MIN_EPOCHS_PER_PHASE and sc["best_depth"] > 0
+                                      and np.median(ed) >= NARROW_EPOCH_MEDIAN_FRAC * sc["best_depth"])
+                if row["repeats"] and (narrow is None or sc["best_z"] > narrow["best_z"]):
+                    narrow = sc
+                    narrow_epochs = (row["n_epochs_dipping"], row["n_epochs"])
+        widths_metric.append(row)
+    r.metrics["box_widths"] = widths_metric
+    r.metrics["narrow_box_detection"] = (None if narrow is None else {
+        "width_fraction": narrow["frac"], "width_h": _f(full_dur * 24 * narrow["frac"]),
+        "phase": narrow["best_phase"], "depth_ppm": _f(narrow["best_depth"]), "sigma": _f(narrow["best_z"]),
+        "n_epochs_dipping": narrow_epochs[0], "n_epochs": narrow_epochs[1]})
+
 
     # ---- ellipsoidal and beaming -----------------------------------------
     # These are smooth, full-phase signals, not localised dips, so the ordinary
@@ -297,6 +370,19 @@ def run(ctx: cli.Context) -> Result:
                   f"(1 sigma = {sigma:.0f} ppm, from the {sigma_source})")
     ell = harm["ellipsoidal"]
 
+    narrow_note = ""
+    if ok and narrow is not None and narrow["best_z"] > best_z:
+        # The verdict below is then about the narrow-box detection; the full-width numbers
+        # stay in the metrics above.
+        best_phase, best_depth, best_z = narrow["best_phase"], narrow["best_depth"], narrow["best_z"]
+        ecc_cos_w = float(np.pi / 2 * (best_phase - 0.5))
+        r.metrics["ecc_cos_omega_if_secondary"] = ecc_cos_w
+        narrow_note = (f" Found with a box {narrow['frac']:g} x the transit duration "
+                       f"({full_dur * 24 * narrow['frac']:.1f} h); the full-width box gives "
+                       f"{S['best_z']:.1f} sigma, the neighbouring widths see it at the same phase, "
+                       f"and {narrow_epochs[0]} of {narrow_epochs[1]} epochs dip there.")
+        limit_note += narrow_note
+
     if not ok:
         r.inconclusive("self-check failed: " + r.self_check["detail"])
     elif best_z >= SECONDARY_STRONG_SIGMA:
@@ -326,8 +412,9 @@ def run(ctx: cli.Context) -> Result:
                    f"planet produces a secondary this deep in the TESS band: "
                    f"reflection off a hot Jupiter reaches ~100 ppm, and even "
                    f"a self-luminous young giant at 3000 K stays under "
-                   f"{SECONDARY_FAIL_DEPTH_PPM:.0f}. This is a stellar "
-                   f"companion. {limit_note}")
+                   f"{SECONDARY_FAIL_DEPTH_PPM:.0f}. Not a planet: an "
+                   f"eclipsing stellar companion, or a dip in the star's own "
+                   f"light that repeats at this phase. {limit_note}")
         else:
             r.flag(f"secondary eclipse {where}: {best_depth:.0f} ppm at "
                    f"{best_z:.1f} sigma -- significant, but shallow enough "
@@ -349,7 +436,9 @@ def run(ctx: cli.Context) -> Result:
 
     if ctx.make_plots:
         try:
-            _plot(ctx, r, p, phases, depths - offset, z, sigma, guard, harm)
+            show = narrow if (narrow is not None and narrow["best_z"] >= S["best_z"]) else S
+            _plot(ctx, r, p, phases, depths - offset, z, sigma, guard, harm,
+                  show=show, full_dur=full_dur, exclude=exclude)
         except Exception as exc:  # noqa: BLE001
             r.provenance.setdefault("notes", []).append(f"plotting failed: {exc!r}")
     return r
@@ -538,11 +627,55 @@ def _harmonics(ph_frac, f, exclude) -> dict:
     }
 
 
-def _plot(ctx, r, p, phases, depths, z, sigma, guard, harm):
-    fig, axes = figure(2, 1, figsize=(10, 7))
+def _epoch_residuals(p, phase, half, base_lo, base_hi, exclude=None, poly_order=2):
+    """What ``_local_depth_at`` measures, kept per point: for each epoch around ``phase``,
+    hours from mid-eclipse, residual from that epoch's own polynomial baseline (ppm), and
+    the epoch's depth with its error.  For the plot, so a person sees what the number saw."""
+    t, f = p.t, p.f
+    period = p.period
+    tc = p.t0 + phase * period
+    d = ((t - tc + 0.5 * period) % period) - 0.5 * period
+    ep = np.round((t - tc) / period).astype(int)
+    win = base_hi * period
+    keep = np.ones(t.size, bool) if exclude is None else ~np.asarray(exclude, bool)
+    xs, rs, eps = [], [], []
+    for e in np.unique(ep[np.abs(d) < win]):
+        m = (ep == e) & (np.abs(d) < win) & keep
+        if m.sum() < 12:
+            continue
+        x, y = d[m], f[m]
+        inb = np.abs(x) < half * period
+        out = np.abs(x) >= base_lo * period
+        if inb.sum() < 3 or out.sum() < 8:
+            continue
+        try:
+            c = np.polyfit(x[out], y[out], poly_order)
+        except (np.linalg.LinAlgError, ValueError):
+            continue
+        res = (y - np.polyval(c, x)) * 1e6
+        xs.append(x * 24.0)
+        rs.append(res)
+        eps.append((float(tc + e * period), float(-np.mean(res[inb])),
+                    float(np.std(res[out]) / np.sqrt(inb.sum()))))
+    if not xs:
+        return np.array([]), np.array([]), []
+    return np.concatenate(xs), np.concatenate(rs), eps
 
-    ax = axes[0]
-    ax.plot(phases, depths, "-", color=C_BINNED, lw=1.0)
+
+def _plot(ctx, r, p, phases, depths, z, sigma, guard, harm, show=None, full_dur=None,
+          exclude=None):
+    fig, axes = figure(2, 2, figsize=(13, 8))
+    period = p.period
+    detected = r.status in ("FAIL", "FLAG") and (r.metrics.get("best_sigma") or 0) >= SECONDARY_FLAG_SIGMA \
+        or r.metrics.get("narrow_box_detection") is not None
+
+    ax = axes[0, 0]
+    ax.plot(phases, depths, "-", color=C_BINNED, lw=1.0, label="full-width box")
+    if show is not None and show.get("frac", 1.0) < 1.0:
+        ax.plot(show["phases"], show["depths"] - show["offset"], "-", color=C_ALT, lw=0.8, alpha=0.8,
+                label=f"{show['frac']:g} x width box")
+        ax.plot([show["best_phase"]], [show["best_depth"]], "v", ms=8, color=C_BAD,
+                label=f"narrow box: {show['best_z']:.1f} sigma")
     ax.axhspan(-3 * sigma, 3 * sigma, color=C_OK, alpha=0.12,
                label=f"+/-3 sigma ({3 * sigma:.0f} ppm)")
     ax.axhline(0, color="k", lw=0.5, alpha=0.4)
@@ -551,24 +684,65 @@ def _plot(ctx, r, p, phases, depths, z, sigma, guard, harm):
     ax.axvline(0.5, color=C_ALT, ls="--", lw=0.9, label="phase 0.5")
     bp = r.metrics.get("best_phase")
     if bp is not None:
-        ax.plot([bp], [r.metrics["best_depth_ppm"]], "v", ms=8, color=C_BAD,
-                label=f"deepest: {r.metrics['best_sigma']:.1f} sigma")
+        ax.plot([bp], [r.metrics["best_depth_ppm"]], "v", ms=7, color="k", mfc="none",
+                label=f"full width deepest: {r.metrics['best_sigma']:.1f} sigma")
     # Scale to the *searched* phases only.  The primary leaks into the edge of
     # its own guard band, and left to autoscale it sets the y-limits: the
     # secondary search -- the entire point of the panel -- is then a flat line
     # at the bottom of a 3700 ppm axis.
-    searched = (phases > guard) & (phases < 1 - guard)
+    searched = (phases > guard) & (phases < 1 - guard) & np.isfinite(depths)
     if searched.any():
         lo, hi = np.min(depths[searched]), np.max(depths[searched])
+        if show is not None and show.get("frac", 1.0) < 1.0:
+            hi = max(hi, show["best_depth"])
         pad = max(0.25 * (hi - lo), 4 * sigma)
         ax.set_ylim(lo - pad, hi + pad)
     ax.set_xlabel("orbital phase (0 = transit)")
     ax.set_ylabel("depth [ppm]")
-    ax.set_title("depth of a transit-width box at every phase "
-                 "(scaled to the searched phases)")
-    ax.legend(ncol=4, loc="lower right", fontsize=7)
+    ax.set_title("depth of a box at every phase (scaled to the searched phases)")
+    ax.legend(ncol=2, loc="lower right", fontsize=7)
 
-    ax = axes[1]
+    # ---- the eclipse itself, or its absence -------------------------------
+    eps = []
+    if show is not None and full_dur:
+        dur = full_dur * show.get("frac", 1.0)
+        half, base_lo, base_hi = 0.5 * 0.8 * dur / period, 0.75 * dur / period, 3.0 * dur / period
+        ph0 = show["best_phase"]
+        x, res, eps = _epoch_residuals(p, ph0, half, base_lo, base_hi, exclude=exclude)
+        ax = axes[0, 1]
+        if x.size:
+            ax.plot(x, res, ".", ms=2, color="0.75", zorder=1)
+            xb, yb, eb, _ = bin_series(x, res, max(dur * 24 / 6, 0.1), min_points=3)
+            ax.errorbar(xb, yb, yerr=eb, fmt="o", ms=4, color=C_BINNED, lw=1.0, zorder=3)
+            lim = max(3.0 * abs(show["best_depth"]), 6.0 * float(np.nanmedian(eb)) if len(eb) else 0, 100.0)
+            ax.set_ylim(-1.6 * lim, lim)
+        ax.axvspan(-half * period * 24, half * period * 24, color=C_BAD if detected else C_OK, alpha=0.12)
+        ax.axhline(0, color="k", lw=0.5, alpha=0.4)
+        ax.axhline(-show["best_depth"], color=C_BAD if detected else "0.5", ls="--", lw=0.9)
+        ax.set_xlabel("hours from this phase's mid-point")
+        ax.set_ylabel("flux - local baseline [ppm]")
+        what = ("secondary eclipse" if (r.status == "FAIL" or show["best_z"] >= SECONDARY_STRONG_SIGMA)
+                else "possible secondary (flagged)" if detected
+                else "deepest dip in the scan (not a detection)")
+        ax.set_title(f"{what}: phase {ph0:.3f}, {show['best_depth']:.0f} ppm at {show['best_z']:.1f} sigma, "
+                     f"{dur * 24:.1f} h box, {len(eps)} epochs", fontsize=9)
+
+    ax = axes[1, 0]
+    if eps:
+        tcs = np.array([e[0] for e in eps]); dd = np.array([e[1] for e in eps]); ee = np.array([e[2] for e in eps])
+        ax.errorbar(np.arange(len(eps)), dd, yerr=ee, fmt="o", ms=5, color=C_BINNED, lw=1.0)
+        ax.axhline(0, color="k", lw=0.5, alpha=0.4)
+        ax.axhline(show["best_depth"], color=C_BAD if detected else "0.5", ls="--", lw=0.9, label="scan depth")
+        ax.set_xticks(np.arange(len(eps)))
+        ax.set_xticklabels([f"{t:.0f}" for t in tcs], rotation=60, fontsize=6)
+        ax.set_xlabel("epoch (BTJD)")
+        ax.set_ylabel("depth at this phase [ppm]")
+        ax.set_title(f"the same phase, epoch by epoch: {int((dd > 0).sum())} of {len(dd)} are dips", fontsize=9)
+        ax.legend(fontsize=7)
+    else:
+        ax.set_axis_off()
+
+    ax = axes[1, 1]
     ph = ephem.phase_frac(p.t, p.period, p.t0)
     y = (p.f_detrended - 1) * 1e6
     xb, yb, eb, _ = bin_series(ph, y, 1.0 / 120, min_points=5)
