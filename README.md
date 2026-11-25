@@ -134,7 +134,7 @@ leaves behind on its own; the real epochs are compared with that.
 ![DS Tuc A c interpolation test](docs/images/dstuc_c_interp.png)
 
 **Each transit fitted jointly with the variability, against the same fit where there is
-no transit** (`pc-jointgp`). The candidate (red line, right) stands 8.2σ above the
+no transit** (`pc-jointgp`). The candidate (red line, right) stands 9.7σ above the
 null phases.
 
 ![DS Tuc A c joint GP test](docs/images/dstuc_c_jointgp.png)

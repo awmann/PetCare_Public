@@ -46,7 +46,7 @@ from ..plotting import (C_ALT, C_BAD, C_BINNED, C_MODEL, C_OK, annotate_status,
 from ..result import Result
 
 TEST = "secondary"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 #: Significance at which a dip away from the transit is worth a human's time.
 #: PROVISIONAL: 4 sigma on a phase scan of a few hundred trials expects ~0.01
@@ -89,6 +89,17 @@ NARROW_AGREE_SIGMA = 4.0
 #: epoch at 13,000 ppm and three near 1,000; another "12.8%" was two of five.  The binary
 #: above has 7 of 7 epochs between 3,400 and 8,000 ppm, median 0.95 of the depth.
 NARROW_EPOCH_MEDIAN_FRAC = 0.5
+
+#: The full-width detection must repeat too before it can FAIL (0.3.0).  The scan looks at
+#: every phase, so the longer the period the more trial phases there are and the fewer epochs
+#: cover each one: the test failed 0.3% of candidates below 1 d but 17% at 30-45 d, typically on
+#: four visits to a phase of which one or two were bad (an injected planet "failed" on a 37%
+#: secondary at 116 sigma: two junk epochs of five).  A FAIL now needs MIN_EPOCHS_PER_PHASE
+#: epochs at that phase, a median per-epoch depth of NARROW_EPOCH_MEDIAN_FRAC of the detected
+#: depth, and this fraction of it left in the mean once the deepest epoch is dropped; otherwise
+#: it is a FLAG.  Injected planets failed: 16 of 120 -> 1 at 40-60 d, 2 of 300 -> 1 at 1-30 d.
+#: Main-table fails kept: 90% below 5 d, 11% at 30-45 d (secproto/, 948 measured).
+FULL_WITHOUT_DEEPEST_FRAC = 0.5
 
 #: Epochs a trial phase needs before its depth is a measurement.  A real
 #: eclipse repeats; below this there is no way to tell one from a single bad
@@ -370,6 +381,28 @@ def run(ctx: cli.Context) -> Result:
                   f"(1 sigma = {sigma:.0f} ppm, from the {sigma_source})")
     ell = harm["ellipsoidal"]
 
+    # ---- does the full-width detection repeat? -----------------------------
+    full_repeats, full_rep_note = None, ""
+    if np.isfinite(best_z) and best_z >= SECONDARY_STRONG_SIGMA and best_depth > 0:
+        try:
+            _, _, eps_f = _epoch_residuals(p, best_phase, 0.5 * 0.8 * full_dur / period,
+                                           0.75 * full_dur / period, 3.0 * full_dur / period, exclude=exclude)
+            ed = np.array([e[1] for e in eps_f], float)
+            wo = float(np.mean(np.sort(ed)[:-1])) if ed.size > 1 else np.nan
+            med = float(np.median(ed)) if ed.size else np.nan
+            full_repeats = bool(ed.size >= MIN_EPOCHS_PER_PHASE and med >= NARROW_EPOCH_MEDIAN_FRAC * best_depth
+                                and wo >= FULL_WITHOUT_DEEPEST_FRAC * best_depth)
+            r.metrics["full_width_repeat"] = {
+                "n_epochs": int(ed.size), "n_epochs_dipping": int((ed > 0).sum()),
+                "epoch_median_over_depth": _f(med / best_depth), "mean_without_deepest_over_depth": _f(wo / best_depth),
+                "epoch_depths_ppm": [_f(x) for x in ed[:60]], "repeats": full_repeats}
+            full_rep_note = (f"{int(ed.size)} epoch(s) cover that phase, {int((ed > 0).sum())} dip; the median epoch is "
+                             f"{med / best_depth:.2f} of the depth"
+                             + (f" and {wo / best_depth:.2f} of it is left without the deepest epoch" if np.isfinite(wo) else ""))
+        except Exception as exc:  # noqa: BLE001 -- without the check the detection cannot refute
+            full_repeats = False
+            full_rep_note = f"the per-epoch check failed ({exc!r})"
+
     narrow_note = ""
     if ok and narrow is not None and narrow["best_z"] > best_z:
         # The verdict below is then about the narrow-box detection; the full-width numbers
@@ -406,6 +439,14 @@ def run(ctx: cli.Context) -> Result:
                    f"not from a converged fit. Flagging rather than refuting: "
                    f"a secondary's phase is the whole claim. Re-run once "
                    f"pc_fit produces a usable ephemeris. {limit_note}")
+        elif best_depth >= SECONDARY_FAIL_DEPTH_PPM and not narrow_note and not full_repeats:
+            r.flag(f"secondary eclipse {where}: {best_depth:.0f} ppm "
+                   f"({best_depth / 1e4:.2f}%) at {best_z:.1f} sigma, too deep for a planet -- "
+                   f"but it does not repeat: {full_rep_note}. A refutation needs "
+                   f"{MIN_EPOCHS_PER_PHASE} epochs at that phase with a median of "
+                   f"{NARROW_EPOCH_MEDIAN_FRAC:g} of the depth and {FULL_WITHOUT_DEEPEST_FRAC:g} of it "
+                   f"left without the deepest one; with fewer, one bad epoch at one of "
+                   f"{n_phase} trial phases makes this. {limit_note}")
         elif best_depth >= SECONDARY_FAIL_DEPTH_PPM:
             r.fail(f"secondary eclipse {where}: {best_depth:.0f} ppm "
                    f"({best_depth / 1e4:.2f}%) at {best_z:.1f} sigma. No "

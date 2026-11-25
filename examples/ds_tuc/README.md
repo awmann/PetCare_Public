@@ -63,9 +63,9 @@ same TESS sectors:
 
 | input | epochs | fit depth | joint GP, above the null phases | result |
 |---|---:|---:|---:|---|
-| tessquicklook, via `pc-extract` | 12 | 812 ppm | 8.2 sigma | no FAIL |
+| tessquicklook, via `pc-extract` | 12 | 812 ppm | 9.7 sigma | no FAIL |
 | tessquicklook CSV (no quality mask) | 12 | 768 ppm | 2.2 sigma | `jointgp` FAIL |
-| SPOC 120 s PDCSAP | 10 | 860 ppm | 2.2 sigma | `jointgp` FAIL |
+| SPOC 120 s PDCSAP | 10 | 860 ppm | 1.3 sigma | `jointgp` FAIL |
 
 The public SPOC light curve is too noisy to recover this planet with confidence. A
 local-baseline fit still finds a dip of about the right depth, but it is not significant

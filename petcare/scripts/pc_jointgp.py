@@ -63,7 +63,7 @@ from ..plotting import C_BAD, C_BINNED, C_MODEL, annotate_status, figure, save
 from ..result import Result, Status
 
 TEST = "jointgp"
-VERSION = "0.3.0"
+VERSION = "0.3.2"
 
 #: Half-width of each transit's window, in T14, with a floor in days, so the GP
 #: sees enough out-of-transit flux on both sides to pin itself down.
@@ -82,9 +82,15 @@ RESTRAINT = 0.1
 #: Null phases (fractions of the period) for the calibration.  A phase within
 #: NULL_MIN_SEP_T14 durations of the transit is skipped, and the real transits
 #: are removed from the null fits.  Fewer than NULL_MIN usable nulls -> the 0.1.x fit.
-NULL_PHASES = np.linspace(0.15, 0.85, 16)
+#: 0.3.1: 46 phases, up from 16 (every third one is an old phase), and
+#: NULL_MIN 14, up from 5 (the same ~30% share).  With 16, the calibrated significance
+#: depended on which phases were drawn: 18 of 162 benchmark cases within 2.5-6.5 sigma
+#: changed verdict between the 16 and the 46, in both directions.  FAIL rates on known
+#: planets (6 -> 7 of 47), injections (29 -> 30 of 99) and candidates rejected by eye
+#: (23 -> 23 of 97) are unchanged; the cost is run time in the null loop.
+NULL_PHASES = np.linspace(0.15, 0.85, 46)
 NULL_MIN_SEP_T14 = 3.0
-NULL_MIN = 5
+NULL_MIN = 14
 #: Calibrated significance.  FAIL below CAL_FAIL_SIGMA: 3.0 was the prototype's cut,
 #: raised to 4.0 in 0.3.0.  On our benchmark that moves injected planets wrongly
 #: failed from 37 to 59 of 300, known planets from 5 to 6 of 49, eye-vetted
@@ -92,6 +98,21 @@ NULL_MIN = 5
 #: of 103 (5.0 would give 81, 9, 7 and 36).
 CAL_FAIL_SIGMA = 4.0
 CAL_PASS_SIGMA = 5.0
+#: 0.3.2: a second look before a FAIL.  When the fixed-ephemeris fit is
+#: under CAL_FAIL_SIGMA and pc_fit did not PASS (no usable fit, so the mid-time is the
+#: search's; or a FLAG fit, whose duration can run long), the restrained fit is repeated
+#: over mid-time shifts of +/-REFINE_T0_T14 x T14 and durations x REFINE_SCALES, the best
+#: taken, and every null phase given the same choice.  The candidate FAILs only if that
+#: also stays under CAL_FAIL_SIGMA.  On the 442-case benchmark this turned two known
+#: planets run at search ephemerides from FAIL to PASS/FLAG (3 of 3 runs) and rescued one
+#: long-period candidate; known planets 7 of 47 and shortlisted candidates 5 of 57 failing
+#: were unchanged, injections went from 30 to 27 of 99, and 2 more of 97 candidates
+#: rejected by eye passed.  Mid-time freedom alone left one control failing; a PASS fit gains nothing.
+REFINE_T0_T14 = np.array([-0.25, -0.125, 0.0, 0.125, 0.25])
+REFINE_SCALES = np.array([0.8, 1.0, 1.25])
+#: Full width, in T14, of the real transit removed from the refined nulls (1.5 fixed).
+REFINE_EXCLUDE_T14 = 4.0
+REFINE_SKIP_MARGIN = 1.0
 #: 0.1.x grading, used only when there are too few nulls.  Calibrated on a
 #: benchmark of 22 known young planets: all 21 with more than one transit score
 #: 7.1-58 sigma.  The consistency flag fires on two heavily spotted hosts, so it
@@ -236,6 +257,55 @@ def _epochs(t, f, err, shape, spec, period, t0, t14, method, exclude=None):
     return rows, n_failed
 
 
+def _fit_status(ctx):
+    """pc_fit's status for this candidate, or None when there is no readable fit."""
+    fitf = ctx.out / ctx.target.slug / (
+        f"fit_c{ctx.candidate.index}.json" if ctx.candidate.index else "fit.json")
+    try:
+        return str(json.loads(fitf.read_text()).get("status"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _refined(ctx, t, f, err, spec, period, t0, t14, exp_days, null_phases, null_med_fixed):
+    """0.3.2: the restrained fit maximised over a small box in mid-time and duration,
+    for the candidate and for each null phase.  Returns (z_cal, detail) or (None, {})."""
+    x = np.linspace(-2.5 * t14, 2.5 * t14, 2001)
+    g, _ = _shape(ctx, t0 + x, period, t0, t14, exp_days)
+
+    def box(c0, exclude):
+        best = (-np.inf, 0.0, 1.0)
+        for sc in REFINE_SCALES:
+            for d in REFINE_T0_T14:
+                c = c0 + d * t14
+                dt = ((t - c + 0.5 * period) % period) - 0.5 * period
+                sh = np.interp(dt / sc, x, g, left=0.0, right=0.0)
+                rows, _ = _epochs(t, f, err, sh, spec, period, c, t14 * sc, "restrained",
+                                  exclude=exclude)
+                if len(rows) >= 2:
+                    m, s_, _, _ = _combine(rows)
+                    if m / s_ > best[0]:
+                        best = (float(m / s_), float(d), float(sc))
+        return best
+    zr, shift, scale = box(t0, None)
+    # Shortcut (speed only): each refined null is the best over a box that contains the
+    # fixed null, so their median is not below the fixed median, and the scatter is
+    # floored at 1.  If the best refined candidate value cannot clear the cut even
+    # against the fixed median, with REFINE_SKIP_MARGIN to spare, the nulls are not run.
+    if not np.isfinite(zr) or zr - null_med_fixed < CAL_FAIL_SIGMA - REFINE_SKIP_MARGIN:
+        return None, {"refined_z_uncalibrated": zr if np.isfinite(zr) else None,
+                      "refined_skipped": True}
+    real = ephem.in_transit(t, period, t0, t14, width=REFINE_EXCLUDE_T14)
+    zn = np.array([box(t0 + ph * period, real)[0] for ph in null_phases])
+    zn = zn[np.isfinite(zn)]
+    if not np.isfinite(zr) or zn.size < NULL_MIN:
+        return None, {}
+    med, sd = float(np.median(zn)), float(max(np.std(zn), 1.0))
+    return (zr - med) / sd, {
+        "refined_z_uncalibrated": zr, "refined_t0_shift_t14": shift, "refined_t14_scale": scale,
+        "refined_null_n": int(zn.size), "refined_null_z_median": med, "refined_null_z_sd": sd}
+
+
 def _limited(ctx, rows):
     """0.1.2's sensitivity limit on these rows: (search depth ppm, its sigma at this
     error) when the fit is under FAIL_SIGMA but cannot rule out the search depth."""
@@ -298,10 +368,11 @@ def run(ctx: cli.Context) -> Result:
 
     # the same restrained fit where there is no transit, real transits removed
     real = ephem.in_transit(t, period, t0, t14, width=1.5)
-    z_null = []
+    z_null, null_used = [], []
     for ph in NULL_PHASES:
         if min(ph, 1 - ph) * period < NULL_MIN_SEP_T14 * t14:
             continue
+        null_used.append(ph)
         # shape at the shifted ephemeris; pc_fit's geometry is phase-free
         tn = t0 + ph * period
         sn, _ = _shape(ctx, t, period, tn, t14, exp_days)
@@ -336,6 +407,22 @@ def run(ctx: cli.Context) -> Result:
     else:
         null_med = null_sd = z_cal = None
 
+    # 0.3.2: a second look before a FAIL, where pc_fit did not PASS (see REFINE_*)
+    z_fixed, refine = z_cal, {}
+    fit_status = _fit_status(ctx)
+    if (calibrated and n >= 2 and z_cal < CAL_FAIL_SIGMA
+            and (shape_src.startswith("trapezoid") or fit_status == str(Status.FLAG))):
+        try:
+            z_ref, refine = _refined(ctx, t, f, err, spec, period, t0, t14, exp_days, null_used, null_med)
+        except Exception as exc:  # noqa: BLE001 - the second look must not sink the test
+            z_ref = None
+            ctx.notes.append(f"refined fit failed: {type(exc).__name__}: {exc}")
+        if z_ref is not None:
+            refine["refined_z"] = float(z_ref)
+            if z_ref >= CAL_FAIL_SIGMA:
+                z_cal = float(z_ref)
+    rescued = calibrated and z_cal is not z_fixed
+
     r.metrics.update({
         "method": "restrained GP, null-calibrated" if calibrated
                   else "full GP (too few null phases to calibrate)",
@@ -356,6 +443,9 @@ def run(ctx: cli.Context) -> Result:
         "window_half_days": max(WINDOW_T14 * t14, WINDOW_MIN_DAYS),
         "gp_kind": getattr(spec, "kind", None),
         "n_windows_failed": n_failed,
+        "z_fixed_ephemeris": float(z_fixed) if z_fixed is not None else None,
+        "refined": bool(rescued), "fit_status_seen": fit_status,
+        **refine,
     })
     r.set_self_check(True, f"{n} transit(s) fitted jointly with a GP whose "
                            f"hyperparameters were trained out of transit; shape "
@@ -368,6 +458,17 @@ def run(ctx: cli.Context) -> Result:
                 f"chance on this star (the unrestrained fit: {z_full:.1f} sigma). "
                 f"Per-epoch depths chi2 = {chi2c:.1f} for {max(n - 1, 0)} dof "
                 f"(p = {p_cons:.1g}).")
+        if rescued:
+            desc = (f"At the input mid-time and duration the transit stands only "
+                    f"{z_fixed:.1f} sigma above chance; with the mid-time moved "
+                    f"{refine['refined_t0_shift_t14']:+.3f} T14 and the duration x"
+                    f"{refine['refined_t14_scale']:.2f} (pc_fit: {fit_status or 'none'}) it "
+                    f"stands {z_cal:.1f} sigma above null phases given the same freedom, "
+                    f"and that is the number judged. At the input ephemeris: " + desc)
+        elif refine.get("refined_z") is not None:
+            desc += (f" A second look over mid-time +/-{REFINE_T0_T14.max():.2f} T14 and "
+                     f"duration x{REFINE_SCALES.min():.2f}-{REFINE_SCALES.max():.2f} gives "
+                     f"{refine['refined_z']:.1f} sigma, still under the cut.")
     else:
         desc = (f"joint GP + transit fit of {n} transit(s), nothing masked: depth "
                 f"{mean * 1e6:.0f} +/- {sig * 1e6:.0f} ppm ({z:.1f} sigma); too few "
