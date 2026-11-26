@@ -19,7 +19,7 @@ top-level README); without them it reports INCONCLUSIVE and the rest still runs.
 
 ## What it finds
 
-23 tests: 9 PASS, 11 FLAG, 1 FAIL, 2 INCONCLUSIVE (`companion`, until the Sonora grid is
+24 tests: 10 PASS, 11 FLAG, 1 FAIL, 2 INCONCLUSIVE (`companion`, until the Sonora grid is
 downloaded, and `followup`, which finds nothing bearing on this candidate).
 
 Most of the light-curve tests pass: the dip is box-shaped, odd and even transits match,

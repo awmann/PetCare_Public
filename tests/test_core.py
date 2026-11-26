@@ -387,7 +387,7 @@ def test_iso_to_btjd_accepts_the_formats_both_archives_emit():
 
 
 # --------------------------------------------------------------------------
-# the centroid's coherent-offset refutation
+# archival frames: an observation of the target, or an image containing it?
 
 
 def test_looks_targeted_rejects_serendipitous_field_coverage():
@@ -702,3 +702,84 @@ def test_epoch_audit_verdict_thresholds():
     assert verdict(ok[:2], 1.0) is None
     wild = [{"depth": d, "depth_err": 0.001} for d in (0.002, 0.020, 0.004, 0.018)]
     assert not verdict(wild, 0.5)["pass"]
+
+
+# --------------------------------------------------------------------------
+# shape, gaps, multiples and the ranking order
+
+
+def _synthetic_lc(period=5.0, t0=2.0, dur=0.12, depth=0.004, kind="transit", seed=3):
+    rng = np.random.default_rng(seed)
+    t = np.arange(0.0, 27.0, 600.0 / 86400.0)
+    f = 1.0 + 0.002 * np.sin(2 * np.pi * t / 3.3) + rng.normal(0, 4e-4, t.size)
+    x = ((t - t0 + 0.5 * period) % period) - 0.5 * period
+    if kind == "transit":
+        f -= depth * (np.abs(x) < dur / 2)
+    elif kind == "flare":          # a dip with one sharp edge and an exponential recovery
+        f -= depth * np.where(x >= -dur / 2, np.exp(-np.clip(x + dur / 2, 0, None) / 0.03), 0.0)
+    return t, f
+
+
+def test_transitlike_tells_a_box_from_a_flare_shaped_dip():
+    from petcare.scripts import pc_transitlike as tl
+    rho = 1.41 * (13.0 / 24.0 / 0.12) ** 3 * (5.0 / 365.25)      # central T14 = 0.12 d
+    expo = np.full(3888, 600.0 / 86400.0)
+    for kind, want in (("transit", True), ("flare", False)):
+        t, f = _synthetic_lc(kind=kind)
+        m = tl.shape_fit(t, f, expo, 5.0, 2.0, rho)
+        m.pop("_plot")
+        assert tl.judge(m)[0] is want, (kind, m)
+    t, f = _synthetic_lc(depth=0.0)
+    m = tl.shape_fit(t, f, expo, 5.0, 2.0, rho)
+    m.pop("_plot")
+    assert not tl.judge(m)[0]          # no dip is not transit-like
+
+
+def test_transitlike_flare_margin_scales_with_the_dip():
+    """0.3.0: the flare alternative must lose by 5 AND by 5% of the transit's lead over no dip."""
+    from petcare.scripts import pc_transitlike as tl
+    base = {"depth_ppm": 500.0, "dBIC_Gs": 0.0}
+    assert tl.judge(dict(base, dBIC_0=100.0, dBIC_Fs=6.0))[0]          # 6 > max(5, 5)
+    assert not tl.judge(dict(base, dBIC_0=400.0, dBIC_Fs=15.0))[0]     # 15 < 20 = 5% of 400
+    assert not tl.judge(dict(base, dBIC_0=100.0, dBIC_Fs=4.0))[0]      # under the floor of 5
+
+
+def test_transitlike_accepts_a_grazing_v_shaped_transit():
+    from petcare.scripts import pc_transitlike as tl
+    assert max(tl.IMPACT_GRID) > 1.0
+
+
+def test_gap_rule_needs_data_on_both_sides():
+    from types import SimpleNamespace
+    from petcare.scripts import pc_gap
+    t, f = _synthetic_lc()
+    lc = SimpleNamespace(t=t, f=f, cadence_s=np.full(t.size, 600.0))
+    status, m = pc_gap.judge(pc_gap.epochs(lc, 5.0, 2.0, 0.12))
+    assert status == "PASS" and m["n_bracketed"] >= 4
+    # keep only the egress side of every transit: nothing is bracketed
+    x = ((t - 2.0 + 2.5) % 5.0) - 2.5
+    keep = ~((x > -0.4) & (x < 0.0))
+    lc = SimpleNamespace(t=t[keep], f=f[keep], cadence_s=np.full(keep.sum(), 600.0))
+    status, m = pc_gap.judge(pc_gap.epochs(lc, 5.0, 2.0, 0.12))
+    assert status == "FAIL" and m["n_bracketed"] == 0
+
+
+def test_period_multiple_is_integer_and_at_least_two():
+    from petcare.survey import period_multiple
+    assert period_multiple(44.55461, [3.1, 0.92821]) == (48, 0.92821)
+    assert period_multiple(10.0, [10.0]) is None            # the same period is not a multiple
+    assert period_multiple(10.0, [4.0, None, "x", 0.0]) is None
+    assert period_multiple(10.01, [5.0]) is None            # 0.1% off is outside the tolerance
+
+
+def test_rank_score_adds_capped_terms_and_ignores_missing():
+    from petcare import rank
+    model = rank.fit({"a": np.r_[np.full(60, 5.0), np.full(10, 0.0)]},
+                     {"a": np.linspace(0, 6, 1000)}, cap=1.5)
+    hi, lo = rank.score({"a": 5.0}, model), rank.score({"a": 1.0}, model)
+    assert hi > 0 > lo and abs(lo) <= 1.5 and abs(hi) <= 1.5
+    assert rank.score({"a": None, "b": 3}, model) == 0.0
+    assert rank.score({"a": float("nan")}, model) == 0.0
+    shipped = rank.load_model()
+    assert shipped["features"] and all(len(v["logodds"]) == len(v["edges"]) + 1
+                                       for v in shipped["features"].values())

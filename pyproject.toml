@@ -57,6 +57,8 @@ pc-shapetime = "petcare.scripts.pc_shapetime:main"
 pc-interp = "petcare.scripts.pc_interp:main"
 pc-jointgp = "petcare.scripts.pc_jointgp:main"
 pc-flares = "petcare.scripts.pc_flares:main"
+pc-transitlike = "petcare.scripts.pc_transitlike:main"
+pc-gap = "petcare.scripts.pc_gap:main"
 pc-stellar = "petcare.scripts.pc_stellar:main"
 pc-neighbours = "petcare.scripts.pc_neighbours:main"
 pc-astrometry = "petcare.scripts.pc_astrometry:main"
@@ -73,6 +75,9 @@ pc-extract = "petcare.scripts.pc_extract:main"
 
 [tool.setuptools.packages.find]
 include = ["petcare*"]
+
+[tool.setuptools.package-data]
+petcare = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

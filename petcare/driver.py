@@ -36,6 +36,8 @@ from .verdict import effective_statuses
 #: Every test, with its tier and whether it consumes ``pc_fit``'s output.
 #: Tier 0 is catalogue-only, 1 is light-curve-only, 2 needs pixels, 3 hits
 #: external archives.  Order within a tier is the order they run in.
+#: Tier 9 runs on request only (``--only name``): a test not yet adopted for
+#: every candidate.
 TESTS = [
     # (name, module, tier, uses_fit)
     ("stellar",    "pc_stellar",    0, False),
@@ -57,6 +59,8 @@ TESTS = [
     ("jointgp",    "pc_jointgp",    1, True),
     ("uniqueness", "pc_uniqueness", 1, True),
     ("flares",     "pc_flares",     1, True),
+    ("transitlike", "pc_transitlike", 1, False),   # tier 1 since 0.3.0
+    ("gap",        "pc_gap",        9, True),
     # after the three tests it overrules, so it can see whether one of them failed
     ("epoch_audit", "pc_epochaudit", 1, True),
     ("centroid",   "pc_centroid",   2, True),

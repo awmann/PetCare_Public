@@ -171,13 +171,15 @@ Tiered by cost. Tiers 0 and 1 are cheap enough to run on everything.
 | `pc-shape` | is the ingress fraction planet-like, or V-shaped and grazing? |
 | `pc-companion` | at this age, is the radius a planet, a brown dwarf, or a star? |
 | `pc-rotation` | is the period a harmonic of the rotation period? |
-| `pc-phasecurve` | is the dip a sharp transit, or the star's own modulation at that period — does it repeat where the star repeats? |
+| `pc-phasecurve` | is the dip a sharp transit, or the star's own modulation at that period — does it repeat where the star repeats? Modulation is blamed only in a view that could see a transit of the candidate's depth. |
 | `pc-shapetime` | does the transit keep its duration and depth over the years, as a planet's does? |
 | `pc-interp` | is the dip larger than what the GP interpolation across the mask invents at random times on this star? |
 | `pc-jointgp` | is each transit significant when fitted jointly with the variability, nothing masked? |
 | `pc-uniqueness` | is the dip unique in the fold, and a dip (ModShift, SHP)? |
 | `pc-epochaudit` | do the transits agree when each is fitted together with the star's variability? Overrules a FAIL from `pc-depths`, `pc-shapetime` or `pc-oddeven` when they do |
 | `pc-flares` | is the fold carried by flare-adjacent cadences? |
+| `pc-transitlike` | in raw flux, is the dip shaped like a transit rather than a rotation minimum or a flare decay? Grazing (V-shaped) transits count as transits. |
+| `pc-gap` | is the transit ever seen with data on both sides, or only at the edges of gaps? (on request: `--only gap`) |
 | `pc-instrument` | does the signal track the spacecraft rather than the star? |
 
 ### Tier 2 — pixels

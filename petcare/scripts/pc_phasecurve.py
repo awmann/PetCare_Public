@@ -51,6 +51,13 @@ added at an unrelated phase and recovered through exactly the same machinery.
 If the model eats an injected transit, it would eat a real one, and the test
 reports nothing.
 
+**A view may blame the modulation only if it could see the candidate.**  The
+same injection is repeated at the candidate's own depth.  A view where that
+injection is not recovered (0.5-1.5 of its depth, at 3 sigma or more) cannot
+say the candidate's dip is modulation: there, a real transit of that depth
+would also have vanished into the noise.  Such a view can still find a sharp
+dip; it cannot refute.
+
 **Across sectors.**  Spots evolve and planets do not.  The residual dip and the
 amplitude of the smooth modulation are measured sector by sector, so a signal
 that is really the rotation shows up as a modulation whose amplitude wanders
@@ -83,7 +90,7 @@ from ..plotting import (
 from ..result import Result
 
 TEST = "phasecurve"
-VERSION = "0.1.1"
+VERSION = "0.2.0"       # 0.2.0: modulation blamed only in views that see the candidate depth
 
 #: The raw dip has to be real before there is anything to attribute.  The
 #: search found these at det_sigma > 8, so a dip that does not reach this in
@@ -119,6 +126,9 @@ N_NULL = 60
 
 #: Injection recovery window for the self-check.
 RECOVERY_RANGE = (0.5, 1.5)
+#: A view "sees" the candidate depth when an injection at that depth is
+#: recovered within RECOVERY_RANGE and the depth is this many sigma.
+CANDIDATE_SNR_MIN = 3.0
 INJECT_PHASE = 0.37
 
 #: Sibling test: the dip, against the same dip where the star repeats.
@@ -238,17 +248,28 @@ def run(ctx: cli.Context) -> Result:
                       "rotation_cycles_per_period": n_rot,
                       "bin_seconds": float(bin_s)})
 
+    # 0.1.2: the light curve by sector and the individual transits are
+    # the two plots a vetter always needs, and they need no phase-curve model, so they are
+    # drawn even when the test cannot run (they used to be missing for these candidates).
+    def basic_plots():
+        if ctx.make_plots:
+            _plots(ctx, r, lc, p, _sector_of(p.t, lc), {}, {}, period, t0, dur,
+                   which=(_plot_lightcurve_sectors, _plot_transits))
+        return r
+
     gap_frac = 2 * GAP_HALF_T14 * dur / period
     if order < 2 or gap_frac > 0.3:
-        return r.inconclusive(
+        r.inconclusive(
             f"the transit is too long for its period to separate from a smooth "
             f"phase curve: the excluded window is {gap_frac:.0%} of the orbit "
             f"and the model could go no higher than harmonic {order}")
+        return basic_plots()
     if n_rot is not None and n_rot > order:
-        return r.inconclusive(
+        r.inconclusive(
             f"the period is {n_rot}x the {prot:.4f} d rotation, so modelling the "
             f"rotation needs harmonic {n_rot}, but a model that fine would also "
             f"fit a {dur * 24:.2f} h transit (limit {order})")
+        return basic_plots()
 
     sec = _sector_of(p.t, lc)
     views = {"detrended": p.f_detrended, "raw": p.f}
@@ -297,6 +318,23 @@ def run(ctx: cli.Context) -> Result:
         "; ".join(f"{k}: injected {v['injected_ppm']:.0f} ppm, recovered "
                   f"{v['recovered_ppm']:.0f} ({(v['fraction'] or 0):.0%})"
                   for k, v in rec.items()) or "no injection was possible")
+
+    # the same injection at the CANDIDATE's depth: the modulation verdict may only
+    # come from a view in which a transit of that depth survives the Fourier model
+    cand_ppm = ctx.candidate.depth_ppm
+    rec_cand = {}
+    if cand_ppm and cand_ppm > 0:
+        for name, flux in views.items():
+            ph = ephem.phase_frac(p.t, period, t0)
+            dph = ((ph - INJECT_PHASE + 0.5) % 1.0) - 0.5
+            box = np.abs(dph * period) < dur / 2
+            mi = _measure(p.t, flux - cand_ppm / 1e6 * box, period, t0, dur, order,
+                          centre=INJECT_PHASE, extra_gap=0.0)
+            sg = meas[name]["sigma"]
+            rec_cand[name] = {"injected_ppm": float(cand_ppm), "recovered_ppm": _f(mi["resid_dip"] * 1e6),
+                              "fraction": _f(mi["resid_dip"] / (cand_ppm / 1e6)),
+                              "snr": _f(cand_ppm / 1e6 / sg) if sg and np.isfinite(sg) else None}
+    r.metrics["injection_candidate_depth"] = rec_cand
 
     # ---- per sector --------------------------------------------------------
     per_sector = []
@@ -359,6 +397,13 @@ def run(ctx: cli.Context) -> Result:
                       and m["explained"] is not None
                       and m["explained"] >= EXPLAINED_FRAC)
                   for k, m in meas.items() if k in ok_views}
+    sees = {k: bool(v.get("fraction") is not None
+                    and RECOVERY_RANGE[0] <= v["fraction"] <= RECOVERY_RANGE[1]
+                    and (v.get("snr") or 0) >= CANDIDATE_SNR_MIN) for k, v in rec_cand.items()}
+    r.metrics["view_sees_candidate_depth"] = sees
+    r.metrics["modulation_blocked_views"] = sorted(k for k, v in modulation.items()
+                                                   if v and not sees.get(k, not rec_cand))
+    modulation = {k: bool(v and sees.get(k, not rec_cand)) for k, v in modulation.items()}
     r.metrics["sharp_in"] = sorted(k for k, v in sharp.items() if v)
     r.metrics["modulation_in"] = sorted(k for k, v in modulation.items() if v)
 
@@ -411,7 +456,7 @@ def run(ctx: cli.Context) -> Result:
                f"phase curve that cannot represent anything as short as the "
                f"transit, and what remains is {sig(m, 'resid_dip'):.1f} sigma. "
                f"{describe(k)}.{harm} An injected transit of the same depth "
-               f"survives the same model ({r.self_check['detail']}), so a real "
+               f"(and one at the candidate's depth) survives the same model ({r.self_check['detail']}), so a real "
                f"one would have.")
     elif max(sig(D, "raw_dip"), sig(R, "raw_dip")) < RAW_SIGMA_MIN:
         r.inconclusive(f"there is no significant dip at this ephemeris in the "
@@ -609,9 +654,9 @@ def _sector_of(t, lc):
 # plots: the test's own figure, plus the light-curve views a vetter needs
 
 
-def _plots(ctx, r, lc, p, sec, meas, per_sector, period, t0, dur):
-    for fn in (_plot_phasecurve, _plot_sector_folds, _plot_lightcurve_sectors,
-               _plot_transits):
+def _plots(ctx, r, lc, p, sec, meas, per_sector, period, t0, dur, which=None):
+    for fn in which or (_plot_phasecurve, _plot_sector_folds, _plot_lightcurve_sectors,
+                        _plot_transits):
         try:
             path = fn(ctx, r, lc, p, sec, meas, per_sector, period, t0, dur)
             if path:

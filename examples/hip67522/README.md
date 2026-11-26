@@ -21,7 +21,7 @@ the harmonic at 0.708 d, and taking the median across sectors stops it deciding 
 | | planet b | planet c |
 |---|---|---|
 | fit | PASS, 4655 ppm | PASS, 3228 ppm |
-| PASS / FLAG / INCONCLUSIVE / FAIL | 13 / 6 / 1 / 0 | 12 / 6 / 2 / 0 |
+| PASS / FLAG / INCONCLUSIVE / FAIL | 14 / 6 / 1 / 0 | 13 / 6 / 2 / 0 |
 | joint GP, above the null phases | FLAG, 40 sigma | PASS, 8.9 sigma |
 | `interp` | PASS | FLAG |
 | `uniqueness` | PASS | FLAG |

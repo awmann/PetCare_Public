@@ -34,7 +34,7 @@ Neither planet is refuted by any test.
 | | planet c | planet b |
 |---|---|---|
 | fit | PASS, 812 ppm, local baseline | PASS, 3984 ppm, GP |
-| PASS / FLAG / INCONCLUSIVE / FAIL | 14 / 4 / 2 / 0 | 15 / 5 / 0 / 0 |
+| PASS / FLAG / INCONCLUSIVE / FAIL | 15 / 4 / 2 / 0 | 16 / 5 / 0 / 0 |
 
 Each planet's row in `candidates.csv` masks the other, because the table lists both.
 
